@@ -1,4 +1,7 @@
 # OverMem | 旧忆重逢
+
+> 现阶段正在编写核心代码，请耐心等待发布
+
 <div align="center">
     <img src="https://visitor.serveryyswys.top/cnt/overmem" alt="OverMem | 旧忆重逢"></img><br>
     <i>*那些被遗忘的对话，终将再次被记起。*</i>
