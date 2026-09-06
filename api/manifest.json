@@ -49,10 +49,10 @@
         }
     ],
     "source-relation":{
-        "downstream-list":{
+        "list":[
             {"MainID":"center","Source-Node-id":"center","downstream":["center-mirror"],"type":"mirror"},
             {"MainID":"center","Source-Node-id":"center","downstream":["center-extend"],"type":"extend"}
-        }
+        ]
     }
   }
 }
