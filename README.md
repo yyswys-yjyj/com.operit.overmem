@@ -4,7 +4,8 @@
 
 <div align="center">
     <img src="https://visitor.serveryyswys.top/cnt/overmem" alt="OverMem | 旧忆重逢"></img><br>
-    <i>*那些被遗忘的对话，终将再次被记起。*</i>
+    <i>*那些被遗忘的对话，终将再次被记起。*</i><br>
+    中文 | <a href="./doc/README.en.md">English</a>
     <br><br>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/GitHub-OverMem-blue?style=for-the-badge&logo=github"></img></a>
     <a href="https://git.repo.archive.serveryyswys.top/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/Gitea-OverMem-green?style=for-the-badge&logo=gitea"></img></a>
