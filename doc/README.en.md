@@ -5,7 +5,7 @@
 <div align="center">
     <img src="https://visitor.serveryyswys.top/cnt/overmem" alt="OverMem | Reunion of Old Memories"></img><br>
     <i>*Those forgotten dialogues will eventually be remembered again.*</i><br>
-    <a href="../README.md">中文</a> | English
+    <a href="../README.md">简体中文</a> | English
     <br><br>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/GitHub-OverMem-blue?style=for-the-badge&logo=github"></img></a>
     <a href="https://git.repo.archive.serveryyswys.top/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/Gitea-OverMem-green?style=for-the-badge&logo=gitea"></img></a>
