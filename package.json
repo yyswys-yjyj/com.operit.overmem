@@ -1,0 +1,13 @@
+{
+  "name": "overmem",
+  "version": "1.0.0",
+  "description": "智能记忆库系统 - 基于SQLite的持久化记忆管理",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
