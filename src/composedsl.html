@@ -1,0 +1,159 @@
+<DOCTYPE html>
+<!-- 这是早期UI设计时留下的草稿，目的是让UI通过DOM来转译成OperitAI 的 Compose DSL 结构设计 -->
+<body>
+  <div>
+    <h1>OverMem 记忆库</h1>
+    <p>智能对话记忆管理</p>
+  </div>
+  <div class="control">
+    <button class="default">欢迎</button>
+    <button>会话管理</button>
+    <button>设置</button>
+  </div>
+  <div class="BUSPage">
+    <div class="search-bar">
+      <input type="text" placeholder="搜索记忆..." />
+    </div>
+    <div class="filter">
+      <h2>筛选器</h2>
+      <button onclick="toggleFilter()">切换筛选器</button>
+        <!-- 筛选器，可以根据对话ID（展示为会话title）来筛选 -->
+    </div>
+    <div class="lazyroll">
+      <div class="page-container">
+        <div class="lazyroll-item">
+          <i class="fa fa-spinner fa-spin"></i>
+          <button class="load-more">加载</button>
+          <p class="hiden">加载中</p>
+          <!--<h3>条目1</h3>
+          记忆节点的东西写进来 
+          <div class="lazyroll"><button class="view" onclick="viewDetails('node1')">查看详情</button><button class="manage-button" onclick="manageNode('node1')">管理</button></div>
+        -->
+        </div>
+      </div>
+    </div>
+    <div class="lazyroll-hiden">
+      <div class="page-container">
+        <button><i class="fa-arrow-left" onclick="UIIndexStackBack()"></i></button> <h3>筛选器</h3>
+        <div class="lazyroll-item">
+          <!-- 这里是筛选器的界面 -->
+          <h3>筛选器条例</h3>
+          <div class="lazyroll"><button class="view" onclick="viewDetails('node1')">查看详情</button><button class="manage-button" onclick="manageNode('node1')">管理</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="lazyroll-hiden">
+      <div class="page-container">
+        <button><i class="fa-arrow-left" onclick="UIIndexStackBack()"></i></button> <h3>记忆节点详情</h3>
+        <div class="lazyroll-item">
+          <!-- 这里是记忆节点详情的界面 -->
+          <h3>节点1</h3>
+          <p>记录对象：user/assistant</p>
+          <p>会话：测试会话</p>
+          <p>记录时间: 2024-06-01 12:00:00</p>
+          <p>节点ID: node1</p>
+          <p>这里是节点1的内容...</p>
+        </div>
+      </div>
+    </div>
+    <div class="lazyroll-hiden">
+      <div class="page-container">
+        <button><i class="fa-arrow-left" onclick="UIIndexStackBack()"></i></button> <h3>记忆节点管理</h3>
+        <div class="lazyroll-item">
+          <!-- 这里是记忆节点管理的界面 -->
+          <h3>节点1</h3>
+          <p>会话：测试会话</p>
+          <p>记录对象：user/assistant</p>
+          <p>记录时间: 2024-06-01 12:00:00</p>
+          <p>节点ID: node1</p>
+          <p>这里是节点1的内容...</p>
+
+          <div class="lazyroll"><button class="default-button" onclick="viewDetails('node1')">查看详情</button><button class="edit-button" onclick="updateEditView('node1')">编辑记忆</button><button class="delete-button" onclick="deleteNode('node1')">删除节点</button></div>
+      </div>
+    </div>
+    <div class="lazyroll-hiden">
+      <button><i class="fa-arrow-left" onclick="UIIndexStackBack()"></i></button> <h3>编辑记忆节点</h3>
+      <div class="lazyroll-item">
+        <!-- 这里是编辑记忆节点的界面 -->
+        <h3>编辑节点1</h3>
+        <form>
+          <label for="content">内容:</label><br>
+          <textarea id="content" name="content" rows="4" cols="50">这里是节点1的内容...</textarea><br>
+          <h5>更改记录对象:</h5>
+          <select name="target" id="target">
+            <option value="session1">用户</option>
+            <option value="session2">AI</option>
+          </select>
+          <button type="submit" onclick="SaveNodeEdit('node1')">保存</button>
+        </form>
+    </div>
+    <div class="page-controls">
+      <button class="prev-page" onclick="goToPage(currentPage - 1, 'prev')">上一页</button>
+      <span class="page-info">第 1 页，共 10 页</span>
+      <button class="next-page" onclick="goToPage(currentPage + 1, 'next')">下一页</button>
+      <!-- 这三个控件要居中，一页展示5个条目 -->
+    </div>
+  </div>
+</body>
+<script>
+function toggleFilter() {
+  const filterDiv = document.querySelector('.filter');
+  const lazyrollHidenDiv = document.querySelector('.lazyroll-hiden');
+  if (lazyrollHidenDiv.style.display === 'none') {
+    lazyrollHidenDiv.style.display = 'block';
+    filterDiv.style.display = 'none';
+  } else {
+    lazyrollHidenDiv.style.display = 'none';
+    filterDiv.style.display = 'block';
+  }
+}
+
+function updatePageInfo(currentPage, totalPages) {
+  const pageInfo = document.querySelector('.page-info');
+  pageInfo.textContent = `第 ${currentPage} 页，共 ${totalPages} 页`;
+}
+
+function updateDetailsView(nodeId) {
+  // 这里是更新详情视图的逻辑
+  // 可以通过 AJAX 请求获取节点详情，然后更新页面内容
+}
+
+function updateManageView(nodeId) {
+  // 这里是更新管理视图的逻辑
+  // 可以通过 AJAX 请求获取节点详情，然后更新页面内容
+}
+
+function updateEditView(nodeId) {
+  // 这里是更新编辑视图的逻辑
+  // 可以通过 AJAX 请求获取节点详情，然后更新页面内容
+}
+
+function IndexAllNodes(filter) {
+  // 这里是获取所有记忆节点的逻辑
+  // 可以通过 AJAX 请求或者其他方式获取数据
+  // 然后更新页面内容
+}
+
+function viewDetails(nodeId) {
+  // 这里是查看详情的逻辑
+  // 可以通过 AJAX 请求获取节点详情，然后显示在页面上
+}
+
+function manageNode(nodeId) {
+  // 这里是管理节点的逻辑
+  // 可以弹出一个管理界面，或者跳转到管理页面
+}
+
+function goToPage(pageNumber,action) {
+  // 这里是分页逻辑
+  // 可以通过 AJAX 请求获取指定页的数据，然后更新页面内容
+  // action 参数可以用来区分是上一页还是下一页
+}
+
+function SaveNodeEdit(nodeId) {
+  // 这里是保存编辑的逻辑
+  // 可以通过 AJAX 请求将编辑后的数据发送到服务器，然后更新页面内容
+}
+
+// 不想写了上述内容基本上全是copilot + Tab一键补全写的
+</script>
