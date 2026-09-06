@@ -1,6 +1,6 @@
 # OverMem | 旧忆重逢
 
-> 现阶段正在编写核心代码，请耐心等待发布
+> 现阶段正在持续完善，**目前完全不可正常使用**，仅ALPHA测试公布源码
 
 <div align="center">
     <img src="https://visitor.serveryyswys.top/cnt/overmem" alt="OverMem | 旧忆重逢"></img><br>
