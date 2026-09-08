@@ -80,6 +80,9 @@ graph TB
 ## 安装与使用
 在Operit AI的插件市场中安装本包后，回到主页，找的侧栏的“OverMem记忆库”入口，点击进入完成配置即可使用。
 
+## 预期发布时间
+理想状态下预计9/13日发布第一个RC版，最大期限于9/19日发布第一个RC版
+
 ## 开源
 该项目基于GNU General Public License v3.0(GPL-3.0)协议开源。   
 开源仓库：[https://github.com/yyswys-yjyj/com.operit.overmem](https://github.com/yyswys-yjyj/com.operit.overmem)
