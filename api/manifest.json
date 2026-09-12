@@ -11,7 +11,7 @@
     "avalible":true,
     "versionID":{
         "type":1,
-        "note":"1=Alpha, 2=Beta, 3=RC, 4=Release",
+        "note":"1=Alpha, 2=Beta, 3=RC",
         "Main":0,
         "Major":1,
         "Minor":0
