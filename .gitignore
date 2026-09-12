@@ -3,6 +3,7 @@ node_modules/
 dist/
 *.md
 !README.md
+!README.en.md
 *.toolpkg
 *.bat
 *.html
