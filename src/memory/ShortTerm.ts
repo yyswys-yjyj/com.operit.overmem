@@ -2,7 +2,7 @@
 
 import { DatabaseManager } from '../db/DatabaseManager';
 import { BlockManager } from '../db/BlockManager';
-import { ScopeType, ShortSegment } from '../db/models';
+import { ScopeType, ShortSegment, PendingSegment } from '../db/models';
 import { CounterManager } from '../utils/CounterManager';
 import { MidTermMemory } from './MidTerm';
 import { logInfo, logError, logDebug } from '../utils/Logger';
@@ -14,8 +14,6 @@ export class ShortTermMemory {
   private blockManager: BlockManager;
   private counterManager: CounterManager;
   private midTerm: MidTermMemory;
-  // 缓存当前未推送的轮次段（按作用域）
-  private pendingRounds: Map<string, ShortSegment[]> = new Map();
 
   constructor() {
     this.db = DatabaseManager.getInstance(DB_PATH);
@@ -24,6 +22,11 @@ export class ShortTermMemory {
     this.midTerm = new MidTermMemory();
   }
 
+  /**
+   * 处理消息
+   * - user：如果暂存区已有上一轮完整 user+assistant，推送为短期块；然后写入当前 user
+   * - assistant：直接覆盖暂存区 assistant（流式多次触发只留最后一条）
+   */
   public async processMessage(
     sessionId: string,
     role: 'user' | 'assistant',
@@ -34,7 +37,7 @@ export class ShortTermMemory {
     roleCardName?: string,
     msgId?: string
   ): Promise<{ segmentId: number; triggered: boolean; blockId?: number }> {
-    logInfo("ShortTerm", "处理消息: session=" + sessionId + ", role=" + role + (msgId ? ", msgId=" + msgId : ""));
+    logInfo("ShortTerm", `处理消息: session=${sessionId}, role=${role}, len=${content.length}`);
 
     try {
       const meta = this.db.getOrCreateSessionMeta(sessionId, title, roleCardId, roleCardName);
@@ -42,173 +45,144 @@ export class ShortTermMemory {
       this.db.updateSessionMeta(meta);
 
       const scope = this.db.getScope(sessionId, meta.roleCardId);
-      const scopeKey = `${scope.type}:${scope.id}`;
-      logDebug("ShortTerm", `作用域: ${scope.type}=${scope.id}`);
 
-      if (role === 'user' && msgId) {
+      // 回滚检测（仅 user）
+      if (role === 'user') {
         const latestUserTs = this.db.getLatestUserMessageTimestamp(sessionId);
         if (latestUserTs > 0 && timestamp < latestUserTs) {
-          logInfo("ShortTerm", "检测到回滚，清理短期记忆，新消息时间戳=" + timestamp + ", 最新=" + latestUserTs);
+          logInfo("ShortTerm", `检测到回滚 (新=${timestamp} < 旧=${latestUserTs})，清理暂存区和短期记忆`);
+          this.db.clearPendingForScope(scope.type, scope.id);
           this.db.clearShortMemoryForScope(scope.type, scope.id);
-          this.pendingRounds.delete(scopeKey);
-          // 重置计数器已在 clearShortMemoryForScope 中重置
+          this.counterManager.resetSegment(scope.type, scope.id);
+          this.counterManager.resetShortBlocks(scope.type, scope.id);
         }
       }
 
-      // 插入段（包含 msgId）
-      const segment: ShortSegment = {
-        scopeType: scope.type,
-        scopeId: scope.id,
-        sessionId: sessionId,
-        role: role,
-        content: content,
-        timestamp: timestamp,
-        msgId: msgId || '',
-        blockId: null,
-        createdAt: Date.now()
-      };
-      const segmentId = this.db.insertSegment(segment);
-      logDebug("ShortTerm", "段已插入: id=" + segmentId + (msgId ? ", msgId=" + msgId : ""));
+      // 读取当前暂存区（按 scope + sessionId 精确过滤）
+      const pending = this.db.getPendingSegments(scope.type, scope.id, sessionId);
+      const prevUser = pending.find(p => p.role === 'user');
+      const prevAssistant = pending.find(p => p.role === 'assistant');
 
-      // 增加段计数（所有消息都计数）
-      this.counterManager.incrementSegment(scope.type, scope.id);
-
-      // 缓存轮次逻辑（与之前相同）
       let triggered = false;
       let blockId: number | undefined;
 
       if (role === 'user') {
-        const cached = this.pendingRounds.get(scopeKey);
-        if (cached && cached.length > 0) {
-          const hasUser = cached.some(s => s.role === 'user');
-          const hasAssistant = cached.some(s => s.role === 'assistant');
-          if (hasUser && hasAssistant) {
-            const pushedBlockId = await this.pushRound(scope.type, scope.id, sessionId, cached);
-            if (pushedBlockId > 0) {
-              blockId = pushedBlockId;
-              triggered = true;
-              await this.triggerMidTermConsolidation(scope.type, scope.id, sessionId);
-            }
-          } else {
-            logDebug("ShortTerm", "上一轮缓存不完整，丢弃");
-          }
-          this.pendingRounds.delete(scopeKey);
-        }
-        this.pendingRounds.set(scopeKey, [segment]);
-      } else if (role === 'assistant') {
-        const cached = this.pendingRounds.get(scopeKey);
-        if (cached && cached.length > 0 && cached[cached.length - 1].role === 'user') {
-          cached.push(segment);
-        } else {
-          logDebug("ShortTerm", "孤儿assistant，不加入缓存");
-        }
-      }
-
-      // 检查短期阈值（仅在正常流程中触发，回滚后不会立即触发，但段计数已达到阈值会触发）
-      if (!triggered) {
-        const config = this.db.getConfig();
-        const threshold = config.shortThreshold || 20;
-        const counters = this.counterManager.getCounters(scope.type, scope.id);
-        const count = counters.segmentCount;
-        if (count >= threshold) {
-          logInfo("ShortTerm", "达到短期整理阈值，触发整理");
-          const pushedBlockId = await this.consolidate(scope.type, scope.id, sessionId);
-          if (pushedBlockId > 0) {
-            blockId = pushedBlockId;
+        // 上一轮完整 → 推送
+        if (prevUser && prevAssistant) {
+          logInfo("ShortTerm", `上一轮完整（user=${prevUser.content.length}, assistant=${prevAssistant.content.length}），推送短期块`);
+          const pushedId = await this.pushRound(scope.type, scope.id, sessionId, prevUser, prevAssistant);
+          if (pushedId > 0) {
+            blockId = pushedId;
             triggered = true;
+
+            const cfg = this.db.getConfig();
+            const countersBefore = this.counterManager.getCounters(scope.type, scope.id);
+            logInfo("ShortTerm",
+              `[检查] 短期块累计=${countersBefore.shortBlockCount} / 中期阈值=${cfg.midThreshold}, ` +
+              `中期块累计=${countersBefore.midBlockCount} / 长期阈值=${cfg.longThreshold}, ` +
+              `长期块累计=${countersBefore.longBlockCount}`);
+
+            this.midTerm.checkConsolidation(scope.type, scope.id, sessionId)
+              .catch((e: any) => logError("ShortTerm", "异步中期整理失败: " + e.message));
           }
+          this.db.clearPendingForScope(scope.type, scope.id);
         }
+
+        // 写入当前 user
+        const pendingUser: PendingSegment = {
+          scopeType: scope.type, scopeId: scope.id,
+          sessionId,
+          role: 'user',
+          content, timestamp,
+          msgId: msgId || '',
+          updatedAt: Date.now()
+        };
+        this.db.savePendingSegment(pendingUser);
+        logInfo("ShortTerm", `当前 user 已入暂存区 (len=${content.length})`);
+      } else {
+        // assistant 覆盖
+        const pendingAssistant: PendingSegment = {
+          scopeType: scope.type, scopeId: scope.id,
+          sessionId,
+          role: 'assistant',
+          content, timestamp,
+          msgId: msgId || '',
+          updatedAt: Date.now()
+        };
+        this.db.savePendingSegment(pendingAssistant);
+        logInfo("ShortTerm", `assistant 已覆盖暂存区 (len=${content.length})`);
       }
 
-      return { segmentId, triggered, blockId };
+      return { segmentId: -1, triggered, blockId };
     } catch (e: any) {
       logError("ShortTerm", "处理消息失败: " + e.message);
       throw e;
     }
   }
 
+  /**
+   * 推送一轮完整对话：写入 short_segments + 创建 short_block
+   */
   private async pushRound(
     scopeType: ScopeType,
     scopeId: string,
     sessionId: string,
-    segments: ShortSegment[]
+    user: PendingSegment,
+    assistant: PendingSegment
   ): Promise<number> {
-    if (!segments || segments.length === 0) return -1;
-    const segmentIds = segments.map(s => s.id!).filter(id => id !== undefined) as number[];
-    if (segmentIds.length === 0) return -1;
+    if (!user || !assistant) return -1;
 
-    const contentLines = segments.map(s => {
-      const label = s.role === 'user' ? '用户' : 'AI';
-      return `${label}: ${s.content}`;
-    });
-    const blockContent = contentLines.join('\n');
+    const now = Date.now();
+    const userSeg: ShortSegment = {
+      scopeType, scopeId, sessionId,
+      role: 'user', content: user.content, timestamp: user.timestamp,
+      msgId: user.msgId || '', blockId: null, createdAt: now
+    };
+    const assistantSeg: ShortSegment = {
+      scopeType, scopeId, sessionId,
+      role: 'assistant', content: assistant.content, timestamp: assistant.timestamp,
+      msgId: assistant.msgId || '', blockId: null, createdAt: now + 1
+    };
+    const userSegId = this.db.insertSegment(userSeg);
+    const assistantSegId = this.db.insertSegment(assistantSeg);
 
+    const blockContent = '用户: ' + user.content + '\nAI: ' + assistant.content;
     const blockId = this.blockManager.createShortBlock(
-      scopeType,
-      scopeId,
-      sessionId,
-      blockContent,
-      segmentIds
+      scopeType, scopeId, sessionId, blockContent, [userSegId, assistantSegId]
     );
-    // 增加短期块计数
+
+    this.counterManager.incrementSegment(scopeType, scopeId, 2);
     this.counterManager.incrementShortBlock(scopeType, scopeId, 1);
-    logInfo("ShortTerm", `推送短期块: id=${blockId}, 段数=${segmentIds.length}`);
+
+    logInfo("ShortTerm", `推送短期块: id=${blockId}, userSegId=${userSegId}, assistantSegId=${assistantSegId}`);
     return blockId;
   }
 
-  private async triggerMidTermConsolidation(
-    scopeType: ScopeType,
-    scopeId: string,
-    sessionId: string
-  ): Promise<void> {
-    await this.midTerm.checkConsolidation(scopeType, scopeId, sessionId);
+  /**
+   * 手动同步暂存区（UI 按钮）
+   */
+  public async consolidate(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<number> {
+    logInfo("ShortTerm", `手动同步暂存区: ${scopeType}=${scopeId}, session=${sessionId}`);
+    const pending = this.db.getPendingSegments(scopeType, scopeId, sessionId);
+    const user = pending.find(p => p.role === 'user');
+    const assistant = pending.find(p => p.role === 'assistant');
+    if (!user || !assistant) {
+      logInfo("ShortTerm", `暂存区不完整，跳过（user=${!!user}, assistant=${!!assistant}）`);
+      return 0;
+    }
+    const blockId = await this.pushRound(scopeType, scopeId, sessionId, user, assistant);
+    if (blockId > 0) {
+      this.db.clearPendingForScope(scopeType, scopeId);
+      await this.midTerm.checkConsolidation(scopeType, scopeId, sessionId);
+      return 1;
+    }
+    return 0;
   }
 
-  // 强制整理所有未推送轮次（用于手动或恢复）
-  public async consolidate(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<number> {
-    const segments = this.blockManager.getUnblockedSegments(scopeType, scopeId);
-    // 按轮次分组
-    const rounds: ShortSegment[][] = [];
-    let currentRound: ShortSegment[] = [];
-    let hasUser = false;
-    for (const seg of segments) {
-      if (seg.role === 'user') {
-        if (hasUser && currentRound.length > 0) {
-          rounds.push(currentRound);
-        }
-        currentRound = [seg];
-        hasUser = true;
-      } else if (seg.role === 'assistant' && hasUser) {
-        currentRound.push(seg);
-      } else if (seg.role === 'assistant' && !hasUser) {
-        if (currentRound.length > 0) rounds.push(currentRound);
-        currentRound = [seg];
-        hasUser = false;
-        rounds.push(currentRound);
-        currentRound = [];
-        hasUser = false;
-      }
-    }
-    if (currentRound.length > 0) {
-      rounds.push(currentRound);
-    }
-
-    const completeRounds = rounds.filter(r =>
-      r.some(s => s.role === 'user') && r.some(s => s.role === 'assistant')
-    );
-    if (completeRounds.length === 0) {
-      logDebug("ShortTerm", "没有完整轮次可推送");
-      return -1;
-    }
-
-    let pushed = 0;
-    for (const round of completeRounds) {
-      const blockId = await this.pushRound(scopeType, scopeId, sessionId, round);
-      if (blockId > 0) pushed++;
-    }
-    if (pushed > 0) {
-      await this.triggerMidTermConsolidation(scopeType, scopeId, sessionId);
-    }
-    return pushed;
+  /**
+   * 暂存区状态（UI 展示）
+   */
+  public getPendingInfo(): { scopeKey: string; sessionId: string; role: string; length: number; preview: string }[] {
+    return this.db.getAllPendingInfo();
   }
 }

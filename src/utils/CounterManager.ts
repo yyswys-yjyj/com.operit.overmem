@@ -1,7 +1,7 @@
 /// <reference path="../../types/index.d.ts" />
 
 import { DatabaseManager } from '../db/DatabaseManager';
-import { ScopeType } from '../db/models';
+import { ScopeType, Counters } from '../db/models';
 import { logInfo, logError } from './Logger';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
@@ -10,19 +10,13 @@ const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 // 计数器管理器（内存 + 异步持久化）
 // ============================================
 
-export interface Counters {
-  segmentCount: number;      // 未分块的段数
-  shortBlockCount: number;   // 短期块数
-  midBlockCount: number;     // 中期块数
-}
-
 export class CounterManager {
   private static instance: CounterManager | null = null;
   private db: DatabaseManager;
   private cache: Map<string, Counters> = new Map();
   private pendingWrites: Map<string, Counters> = new Map();
   private writeTimer: number | null = null;
-  private WRITE_DELAY = 500; // 毫秒
+  private WRITE_DELAY = 500;
 
   private constructor() {
     this.db = DatabaseManager.getInstance(DB_PATH);
@@ -35,19 +29,24 @@ export class CounterManager {
     return CounterManager.instance;
   }
 
-  // 获取作用域的计数器（从缓存或数据库）
+  // ============================================
+  // 读取/缓存
+  // ============================================
+
   public getCounters(scopeType: ScopeType, scopeId: string): Counters {
     const key = scopeType + ':' + scopeId;
     if (this.cache.has(key)) {
       return this.cache.get(key)!;
     }
-    // 从数据库加载
     const counters = this.db.loadCounters(scopeType, scopeId);
     this.cache.set(key, counters);
     return counters;
   }
 
-  // 增加段计数
+  // ============================================
+  // 段计数
+  // ============================================
+
   public incrementSegment(scopeType: ScopeType, scopeId: string, delta: number = 1): void {
     const key = scopeType + ':' + scopeId;
     const counters = this.getCounters(scopeType, scopeId);
@@ -56,7 +55,6 @@ export class CounterManager {
     this.scheduleWrite(key, counters);
   }
 
-  // 重置段计数（整理后）
   public resetSegment(scopeType: ScopeType, scopeId: string): void {
     const key = scopeType + ':' + scopeId;
     const counters = this.getCounters(scopeType, scopeId);
@@ -65,7 +63,10 @@ export class CounterManager {
     this.scheduleWrite(key, counters);
   }
 
-  // 增加短期块计数
+  // ============================================
+  // 短期块计数
+  // ============================================
+
   public incrementShortBlock(scopeType: ScopeType, scopeId: string, delta: number = 1): void {
     const key = scopeType + ':' + scopeId;
     const counters = this.getCounters(scopeType, scopeId);
@@ -74,16 +75,6 @@ export class CounterManager {
     this.scheduleWrite(key, counters);
   }
 
-  // 增加中期块计数
-  public incrementMidBlock(scopeType: ScopeType, scopeId: string, delta: number = 1): void {
-    const key = scopeType + ':' + scopeId;
-    const counters = this.getCounters(scopeType, scopeId);
-    counters.midBlockCount += delta;
-    this.cache.set(key, counters);
-    this.scheduleWrite(key, counters);
-  }
-
-  // 重置短期块计数（中期整理后清零）
   public resetShortBlocks(scopeType: ScopeType, scopeId: string): void {
     const key = scopeType + ':' + scopeId;
     const counters = this.getCounters(scopeType, scopeId);
@@ -92,7 +83,18 @@ export class CounterManager {
     this.scheduleWrite(key, counters);
   }
 
-  // 重置中期块计数（长期整理后清零）
+  // ============================================
+  // 中期块计数
+  // ============================================
+
+  public incrementMidBlock(scopeType: ScopeType, scopeId: string, delta: number = 1): void {
+    const key = scopeType + ':' + scopeId;
+    const counters = this.getCounters(scopeType, scopeId);
+    counters.midBlockCount += delta;
+    this.cache.set(key, counters);
+    this.scheduleWrite(key, counters);
+  }
+
   public resetMidBlocks(scopeType: ScopeType, scopeId: string): void {
     const key = scopeType + ':' + scopeId;
     const counters = this.getCounters(scopeType, scopeId);
@@ -101,7 +103,30 @@ export class CounterManager {
     this.scheduleWrite(key, counters);
   }
 
-  // 调度异步写入
+  // ============================================
+  // 长期块计数
+  // ============================================
+
+  public incrementLongBlock(scopeType: ScopeType, scopeId: string, delta: number = 1): void {
+    const key = scopeType + ':' + scopeId;
+    const counters = this.getCounters(scopeType, scopeId);
+    counters.longBlockCount += delta;
+    this.cache.set(key, counters);
+    this.scheduleWrite(key, counters);
+  }
+
+  public resetLongBlocks(scopeType: ScopeType, scopeId: string): void {
+    const key = scopeType + ':' + scopeId;
+    const counters = this.getCounters(scopeType, scopeId);
+    counters.longBlockCount = 0;
+    this.cache.set(key, counters);
+    this.scheduleWrite(key, counters);
+  }
+
+  // ============================================
+  // 异步持久化
+  // ============================================
+
   private scheduleWrite(key: string, counters: Counters): void {
     this.pendingWrites.set(key, { ...counters });
     if (this.writeTimer !== null) {
@@ -113,7 +138,6 @@ export class CounterManager {
     }, this.WRITE_DELAY);
   }
 
-  // 批量写入数据库
   private flushWrites(): void {
     if (this.pendingWrites.size === 0) return;
     const writes = Array.from(this.pendingWrites.entries());
@@ -126,7 +150,6 @@ export class CounterManager {
     }
   }
 
-  // 立即强制写入（关闭时调用）
   public forceFlush(): void {
     this.flushWrites();
   }

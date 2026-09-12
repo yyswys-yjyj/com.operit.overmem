@@ -2,7 +2,7 @@
 
 import { DatabaseManager } from '../db/DatabaseManager';
 import { BlockManager } from '../db/BlockManager';
-import { ScopeType, MidBlock } from '../db/models';
+import { ScopeType } from '../db/models';
 import { PersonalityHelper } from '../utils/PersonalityHelper';
 import { CounterManager } from '../utils/CounterManager';
 import { callAI, buildPersonaSystemPrompt } from '../utils/AIHelper';
@@ -23,16 +23,12 @@ export class LongTermMemory {
     this.counterManager = CounterManager.getInstance();
   }
 
-  public async checkConsolidation(
-    scopeType: ScopeType,
-    scopeId: string,
-    sessionId: string
-  ): Promise<boolean> {
+  public async checkConsolidation(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<boolean> {
+    const config = this.db.getConfig();
+    const threshold = config.longThreshold || 20;
     const counters = this.counterManager.getCounters(scopeType, scopeId);
-    const midBlockCount = counters.midBlockCount;
-    const threshold = 20; // 可配置
-    logDebug("LongTerm", `中期块计数: ${midBlockCount} / 阈值: ${threshold}`);
-    if (midBlockCount >= threshold) {
+    logDebug("LongTerm", `中期块计数: ${counters.midBlockCount} / 阈值: ${threshold}`);
+    if (counters.midBlockCount >= threshold) {
       logInfo("LongTerm", "达到长期整理阈值，触发整理");
       await this.consolidate(scopeType, scopeId, sessionId);
       return true;
@@ -40,11 +36,7 @@ export class LongTermMemory {
     return false;
   }
 
-  public async consolidate(
-    scopeType: ScopeType,
-    scopeId: string,
-    sessionId: string
-  ): Promise<number> {
+  public async consolidate(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<number> {
     logInfo("LongTerm", `开始长期整理: ${scopeType}=${scopeId}`);
 
     try {
@@ -54,8 +46,8 @@ export class LongTermMemory {
         return -1;
       }
 
-      // 按距离降序排序
-      midBlocks.sort((a, b) => b.distance - a.distance);
+      // ✅ 按时间升序取最早的 N 个
+      midBlocks.sort((a, b) => a.createdAt - b.createdAt);
       const takeCount = Math.min(midBlocks.length, 20);
       const selected = midBlocks.slice(0, takeCount);
       const blockIds = selected.map(b => b.id!);
@@ -63,8 +55,8 @@ export class LongTermMemory {
       const lines: string[] = [];
       for (const block of selected) {
         const date = new Date(block.createdAt);
-        const dateStr = `${date.getFullYear()}/${String(date.getMonth()+1).padStart(2,'0')}/${String(date.getDate()).padStart(2,'0')}`;
-        lines.push(`===== 大概是 ${dateStr} 时，你记得的事 =====`);
+        const ds = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
+        lines.push(`===== 大概是 ${ds} 时，你记得的事 =====`);
         lines.push(block.content);
       }
       const text = lines.join('\n\n');
@@ -92,18 +84,26 @@ ${text}
       }
 
       const blockId = this.blockManager.createLongBlock(
-        scopeType,
-        scopeId,
-        sessionId,
-        summary,
-        blockIds
+        scopeType, scopeId, sessionId, summary, blockIds
       );
 
-      // 重置中期块计数
+      // ✅ 删除用到的中期块，完成记忆升级
+      for (const midId of blockIds) {
+        try {
+          this.db.deleteMidBlock(midId);
+        } catch (e: any) {
+          logError("LongTerm", "删除中期块失败: id=" + midId + ", " + e.message);
+        }
+      }
+      logInfo("LongTerm", `已删除 ${blockIds.length} 个中期块`);
+
       this.counterManager.resetMidBlocks(scopeType, scopeId);
+      this.counterManager.incrementLongBlock(scopeType, scopeId, 1);
 
-      logInfo("LongTerm", `长期块创建完成: id=${blockId}, 包含 ${blockIds.length} 个中期块`);
-
+      const counters = this.counterManager.getCounters(scopeType, scopeId);
+      logInfo("LongTerm",
+        `长期块创建完成: id=${blockId}, 来源=${blockIds.length} 个中期块, ` +
+        `当前长期块累计=${counters.longBlockCount}`);
       return blockId;
     } catch (e: any) {
       logError("LongTerm", "整理失败: " + e.message);
@@ -115,17 +115,7 @@ ${text}
     if (scopeType === 'role_card') {
       const card = await this.personality.getCharacterCardById(scopeId);
       return card?.characterSetting || '';
-    } else {
-      const config = this.db.getConfig();
-      if (config.personalityMode === 'custom') {
-        return config.personalityCustomText || '';
-      }
-      const meta = this.db.getSessionMeta(scopeId);
-      if (meta && meta.roleCardId) {
-        const card = await this.personality.getCharacterCardById(meta.roleCardId);
-        return card?.characterSetting || '';
-      }
-      return '';
     }
+    return await this.personality.getPersonalityText(scopeId);
   }
 }

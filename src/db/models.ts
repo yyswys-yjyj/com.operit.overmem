@@ -1,7 +1,7 @@
 /// <reference path="../../types/index.d.ts" />
 
 // ============================================
-// 数据模型定义（新架构 v2）
+// 数据模型定义（v3 - 活跃记忆组 + 回想概率）
 // ============================================
 
 /**
@@ -10,128 +10,133 @@
 export type MemoryLevel = 'short' | 'mid' | 'long';
 
 /**
+ * 记忆状态
+ */
+export type MemoryState = 'normal' | 'active' | 'trash';
+
+/**
  * 作用域类型
- * - session: 仅当前会话可见（透传关闭）
- * - role_card: 同角色卡的所有会话共享（透传开启）
- * - global: 所有会话共享（全局透传）
  */
 export type ScopeType = 'session' | 'role_card' | 'global';
 
+export type DistanceLevel = 'mid' | 'long';
+
 /**
- * 配置项（存储在 config 表）
+ * 配置项
  */
 export interface OverMemConfig {
   // 记忆阈值
-  shortThreshold: number;        // 短期整理阈值，默认 20
-  midThreshold: number;          // 中期整理阈值，默认 40
-  
+  shortThreshold: number;
+  midThreshold: number;
+  longThreshold: number;
+
   // 透传设置
-  sessionPassthrough: boolean;   // 是否透传同角色卡的会话，默认 false
-  globalPassthrough: boolean;    // 是否全局透传，默认 false
-  
-  // 人格设定
-  personalityMode: 'select' | 'custom';  // 选择模式 | 自定义模式
-  personalityCardId: string;             // 选中的角色卡 ID
-  personalityCustomText: string;         // 自定义人设文本
-  personalityName: string;               // 人设名称（用于显示）
-  
+  sessionPassthrough: boolean;
+  globalPassthrough: boolean;
+
+  personalityMode: 'auto' | 'manual';
+  personalityCardId: string;
+  personalityCustomText: string;
+  personalityName: string;
+
+  // 记忆注入
+  injectTopN: number;
+  activeRatio: number;
+  recallEnabled: boolean;
+  recallBlankProbability: number;
+  recallConfuseProbability: number;
+
+  // 调试模式
+  debugMode: boolean;
+
   // 系统
-  initTimestamp: number;         // 初始化时间戳
-  version: number;               // 配置版本号
+  initTimestamp: number;
+  version: number;
+
+  // ✅ 预览计划
+  previewEnabled: boolean;
 }
 
 /**
- * 会话元数据（session_meta 表）
+ * 会话元数据
  */
 export interface SessionMeta {
-  sessionId: string;             // 会话 ID
-  title: string;                 // 会话标题（从 Operit 获取，动态更新）
-  roleCardId: string;            // 绑定的角色卡 ID
-  roleCardName: string;          // 角色卡名称（冗余缓存）
-  lastMessageAt: number;         // 最后消息时间（毫秒）
-  createdAt: number;             // 首次记录时间（毫秒）
-  updatedAt: number;             // 最后更新时间（毫秒）
+  sessionId: string;
+  title: string;
+  roleCardId: string;
+  roleCardName: string;
+  lastMessageAt: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
- * 短期记忆段（short_segments 表）
- * 存储消息原文
+ * 短期记忆段（消息原文）
  */
 export interface ShortSegment {
   id?: number;
-  scopeType: ScopeType;          // 'session' | 'role_card' | 'global'
-  scopeId: string;               // session_id 或 role_card_id 或 'global'
-  sessionId: string;             // 原始会话 ID（用于追溯）
-  role: 'user' | 'assistant';    // 角色
-  content: string;               // 消息原文
-  timestamp: number;             // 消息时间（毫秒）
-  msgId: string;                 // 消息 ID（用于回滚检测）
-  blockId: number | null;        // 所属短期块 ID（整理后关联）
-  createdAt: number;             // 写入时间（毫秒）
+  scopeType: ScopeType;
+  scopeId: string;
+  sessionId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  msgId: string;
+  blockId: number | null;
+  createdAt: number;
 }
 
 /**
- * 短期记忆块（short_blocks 表）
- * 一轮对话（user + assistant）的摘要
+ * 短期记忆块
  */
 export interface ShortBlock {
   id?: number;
   scopeType: ScopeType;
   scopeId: string;
-  content: string;               // 块内容（AI 整理摘要）
-  timestamp: string;             // 时间戳（yyyy-mm-dd）
-  distance: number;              // 距离值（默认 0.0，短期记忆固定为0）
-  segmentCount: number;          // 包含的段数量
-  sourceIds: string;             // 引用的 segment_id 列表（逗号分隔）
-  sessionId: string;             // 原始会话 ID（用于追溯）
-  createdAt: number;             // 创建时间（毫秒）
-  updatedAt: number;             // 更新时间（毫秒）
+  content: string;
+  timestamp: string;
+  distance: number;              // 短期固定为 0
+  segmentCount: number;
+  sourceIds: string;
+  sessionId: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
- * 中期记忆块（mid_blocks 表）
- * 多个短期块的综合摘要
+ * 中期记忆块
  */
 export interface MidBlock {
   id?: number;
   scopeType: ScopeType;
   scopeId: string;
-  content: string;               // AI 综合摘要
-  timestamp: string;             // 时间戳（yyyy-mm-dd）
-  distance: number;              // 距离值（默认 0.0）
-  sourceBlockIds: string;        // 引用的 short_block_id 列表（逗号分隔）
-  sourceCount: number;           // 来源块数量
-  sessionId: string;             // 原始会话 ID（用于追溯）
-  createdAt: number;             // 创建时间（毫秒）
-  updatedAt: number;             // 更新时间（毫秒）
+  content: string;
+  timestamp: string;
+  distance: number;              // 初始 20
+  state: MemoryState;            // normal | active | trash
+  sourceBlockIds: string;
+  sourceCount: number;
+  sessionId: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
- * 长期记忆块（long_blocks 表）
- * 多个中期块的综合摘要
+ * 长期记忆块
  */
 export interface LongBlock {
   id?: number;
   scopeType: ScopeType;
   scopeId: string;
-  content: string;               // AI 综合摘要
-  timestamp: string;             // 时间戳（yyyy-mm-dd）
-  distance: number;              // 距离值（默认 0.0）
-  sourceMidIds: string;          // 引用的 mid_block_id 列表（逗号分隔）
-  sourceCount: number;           // 来源块数量
-  sessionId: string;             // 原始会话 ID（用于追溯）
-  createdAt: number;             // 创建时间（毫秒）
-  updatedAt: number;             // 更新时间（毫秒）
-}
-
-/**
- * 块统计信息
- */
-export interface BlockStats {
-  totalShortBlocks: number;
-  totalMidBlocks: number;
-  totalLongBlocks: number;
-  totalSegments: number;
+  content: string;
+  timestamp: string;
+  distance: number;              // 初始 20
+  state: MemoryState;
+  sourceMidIds: string;
+  sourceCount: number;
+  sessionId: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
@@ -142,5 +147,60 @@ export interface DistanceUpdateResult {
   level: MemoryLevel;
   oldDistance: number;
   newDistance: number;
+  oldState: MemoryState;
+  newState: MemoryState;
   change: number;
+}
+
+/**
+ * 队列项（用于注入）
+ */
+export interface QueueItem {
+  level: DistanceLevel;
+  blockId: number;
+  content: string;               // 已处理（可能挖空/混淆）
+  originalContent: string;       // 原始内容（用于距离处理）
+  distance: number;
+  isActive: boolean;
+  order: number;                 // 打乱后的顺序
+  recallAction: 'none' | 'blank' | 'confuse';
+}
+
+/**
+ * 计数器
+ */
+export interface Counters {
+  segmentCount: number;
+  shortBlockCount: number;
+  midBlockCount: number;
+  longBlockCount: number;
+}
+
+/**
+ * 块统计信息
+ */
+export interface BlockStats {
+  totalShortBlocks: number;
+  totalMidBlocks: number;
+  totalLongBlocks: number;
+  totalActiveBlocks: number;
+  totalSegments: number;
+}
+
+/**
+ * 暂存区段（pending_segments 表）
+ * 主键：(scope_type, scope_id, session_id, role)
+ * - session 模式下 scope_id === session_id，天然按会话区分
+ * - role_card / global 模式下跨会话共享，是设计预期
+ * - 同一 (scope, session, role) 只保留一条，新数据覆盖旧数据
+ */
+export interface PendingSegment {
+  scopeType: ScopeType;
+  scopeId: string;
+  sessionId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  msgId: string;
+  updatedAt: number;
 }

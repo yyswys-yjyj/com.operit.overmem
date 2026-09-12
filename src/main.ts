@@ -2,21 +2,26 @@
 
 import { DatabaseManager } from './db/DatabaseManager';
 import { ShortTermMemory } from './memory/ShortTerm';
+import { MemoryInjector } from './memory/MemoryInjector';
 import { PersonalityHelper } from './utils/PersonalityHelper';
+import { CounterManager } from './utils/CounterManager';
 import { logInfo, logError, logDebug } from './utils/Logger';
+import { debugDumpMessage, debugDumpPending, debugLog, isDebugMode } from './utils/DebugLogger';
 import DashboardScreen from './ui/dashboard/index.ui.js';
+import { SessionHelper } from './utils/SessionHelper';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
+const sessionHelper = SessionHelper.getInstance();
 
-// 初始化数据库
 const db = DatabaseManager.getInstance(DB_PATH);
 if (!db.initialize()) {
   logError("Main", "数据库初始化失败");
 }
 
-// 初始化短期记忆处理器
 const shortTerm = new ShortTermMemory();
+const injector = new MemoryInjector();
 const personality = PersonalityHelper.getInstance();
+const counterManager = CounterManager.getInstance();
 
 // ============================================
 // 去重缓存
@@ -46,48 +51,143 @@ function isDuplicate(sessionId: string, role: string, timestamp: number, content
 }
 
 // ============================================
-// 消息处理插件（在消息进入处理链前触发）
+// XML 剥离（记忆写入前去掉 attachment 等标签）
+// ============================================
+
+function stripMemoryAttachment(content: string): string {
+  if (!content) return '';
+  return String(content)
+    // attachment 标签（含内容）
+    .replace(/<attachment\b[^>]*>[\s\S]*?<\/attachment>/gi, '')
+    // 自闭合 attachment
+    .replace(/<attachment\b[^>]*\/>/gi, '')
+    // 其他常见嵌入标签（可选）
+    .replace(/<workspace_attachment\b[^>]*>[\s\S]*?<\/workspace_attachment>/gi, '')
+    .replace(/<reply_to\b[^>]*>[\s\S]*?<\/reply_to>/gi, '')
+    .replace(/\n{3,}/g, '\n\n')      // 合并多余空行
+    .trim();
+}
+
+// ============================================
+// Prompt 输入处理（before_process）——真正的注入位置
+// ============================================
+
+export async function onPromptBeforeProcess(event: any): Promise<any> {
+  try {
+    const payload = event.eventPayload || event;
+    const chatId = payload.chatId || event.chatId || '';
+    const processedInput = payload.processedInput || '';
+    const rawInput = payload.rawInput || processedInput;
+
+    if (!processedInput || processedInput.length === 0) {
+      return null;
+    }
+
+    // 避免重复注入（同一消息可能被多次触发）
+    if (processedInput.indexOf('<attachment id="overmem_memory_') >= 0) {
+      logInfo("Main", "prompt before_process: 已注入，跳过");
+      return null;
+    }
+
+    logInfo("Main", `prompt before_process: chatId=${chatId}, inputLen=${processedInput.length}`);
+
+    // 从 DB 拿会话元数据
+    const meta = chatId ? db.getSessionMeta(chatId) : null;
+    const roleCardId = meta?.roleCardId || '';
+    const scope = db.getScope(chatId, roleCardId);
+
+    // 构建注入
+    const queue = injector.buildQueue(scope.type, scope.id, rawInput);
+    if (queue.length === 0) {
+      if (isDebugMode()) debugLog("Main/Inject", "无记忆注入");
+      return null;
+    }
+
+    const injectionText = injector.buildInjectionText(queue);
+    const attachmentTag = injector.buildMemoryAttachment(injectionText);
+
+    logInfo("Main",
+      `注入 ${queue.length} 条记忆, 注入文本长度=${injectionText.length}, ` +
+      `attachment 长度=${attachmentTag.length}`);
+
+    if (isDebugMode()) {
+      debugLog("Main/Inject", "注入预览:\n" + injectionText);
+    }
+
+    // 更新距离
+    injector.updateDistancesAfterInjection(queue, { scopeType: scope.type, scopeId: scope.id });
+
+    // 附加到消息末尾
+    const finalInput = (processedInput.replace(/\s+$/, '') + attachmentTag).trim();
+
+    logInfo("Main", `返回注入后的消息, 长度=${finalInput.length}`);
+
+    // ✅ PromptInputHook 的返回：可以直接返回 string，也可以返回 { processedInput: '...' }
+    return { processedInput: finalInput };
+  } catch (e: any) {
+    logError("Main", "prompt before_process 失败: " + e.message);
+    return null;
+  }
+}
+
+// ============================================
+// 用户消息处理（pre-process）
 // ============================================
 
 export async function onMessageProcessing(event: any): Promise<any> {
   const payload = event.eventPayload || event;
   const rawInput = payload.rawInput || payload.messageContent || '';
   const chatId = payload.chatId || payload.chat_id;
-  const characterCardId = payload.characterCardId || payload.character_card_id || '';
-  const chatTitle = payload.chatTitle || payload.title || '';
   const messageId = payload.messageId || payload.id || '';
 
-  if (!rawInput || rawInput.length === 0) {
-    return null;
-  }
+  if (!rawInput || rawInput.length === 0) return null;
 
-  logInfo("Main", "message_processing 触发: chatId=" + chatId + ", input=" + rawInput.substring(0, 50) + ", msgId=" + messageId);
+  logInfo("Main", `message_processing: chatId=${chatId}, input=${rawInput.substring(0, 30)}`);
 
   try {
-    const db = DatabaseManager.getInstance(DB_PATH);
-    const meta = db.getSessionMeta(chatId);
-    const roleCardId = meta?.roleCardId || characterCardId || '';
-    let cardName = '';
-    if (roleCardId) {
-      const card = await personality.getCharacterCardById(roleCardId);
-      if (card) cardName = card.name;
-    }
-    const timestamp = Date.now();
+    // ✅ 从 Operit 拉会话信息（title + 角色卡名）
+    const sessionInfo = await sessionHelper.getSessionInfo(chatId);
+    const chatTitle = sessionInfo.title;
+    const roleCardName = sessionInfo.characterCardName;
+    const roleCardId = '';   // 暂时留空；list_chats 没返回 id
 
+    if (isDebugMode()) {
+      debugLog("Main", `会话信息: title="${chatTitle}", 角色卡="${roleCardName}"`);
+    }
+
+    // 注入记忆
+    const meta = db.getSessionMeta(chatId);
+    const effectiveRoleCardId = meta?.roleCardId || roleCardId || '';
+    const scope = db.getScope(chatId, effectiveRoleCardId);
+    const queue = injector.buildQueue(scope.type, scope.id, rawInput);
+    if (queue.length > 0) {
+      const injectionText = injector.buildInjectionText(queue);
+      logInfo("Main", `注入 ${queue.length} 条记忆，文本长度=${injectionText.length}`);
+      injector.updateDistancesAfterInjection(queue, { scopeType: scope.type, scopeId: scope.id });
+    }
+
+    // 记录用户消息
+    const cleanInput = stripMemoryAttachment(rawInput);
+
+    if (!cleanInput) {
+      logInfo("Main", "剥离后为空，跳过记忆写入");
+      return null;
+    }
+
+    // 只记录用户消息到暂存区（不注入）
+    const timestamp = Date.now();
     const result = await shortTerm.processMessage(
-      chatId,
-      'user',
-      rawInput,
-      timestamp,
-      chatTitle,
-      roleCardId,
-      cardName,
-      messageId
+      chatId, 'user', cleanInput, timestamp, chatTitle,
+      effectiveRoleCardId, roleCardName, messageId
     );
 
-    logInfo("Main", "用户消息已处理: segmentId=" + result.segmentId +
-            ", triggered=" + result.triggered +
-            (result.blockId ? ", blockId=" + result.blockId : ""));
+    if (isDebugMode()) {
+      const counters = counterManager.getCounters(scope.type, scope.id);
+      debugLog("Main/ShortTerm", `用户消息结果: triggered=${result.triggered}, blockId=${result.blockId || 'none'}`);
+      debugLog("Main/ShortTerm", `计数器: 段=${counters.segmentCount}, 短块=${counters.shortBlockCount}`);
+      debugDumpPending("Main/ShortTerm", shortTerm.getPendingInfo());
+    }
+
     return null;
   } catch (error: any) {
     logError("Main", "message_processing 处理失败: " + error.message);
@@ -96,86 +196,54 @@ export async function onMessageProcessing(event: any): Promise<any> {
 }
 
 // ============================================
-// Hook 处理函数（消息持久化后，用于记录 AI 回复）
+// AI 消息持久化
 // ============================================
 
-// src/main.ts
 export async function onMessagePersisted(event: any): Promise<any> {
-  if (event.eventName !== 'message_persisted') {
-    return { handled: false };
-  }
-
-  logInfo("Main", "收到 message_persisted 事件");
+  if (event.eventName !== 'message_persisted') return { handled: false };
 
   try {
     const payload = event.eventPayload || event;
     const sender = payload.sender;
-    const content = payload.content;
-    const timestamp = payload.timestamp;
-    const isToolCall = payload.isToolCall || payload.toolCall || false;
-    const messageType = payload.messageType || payload.type || '';
-    const characterCardId = payload.characterCardId || payload.character_card_id || '';
-    const chatTitle = payload.title || payload.chatTitle || '';
-    const completedAt = payload.completedAt;       // 消息完成时间
-    const isComplete = payload.isComplete !== undefined ? payload.isComplete : (completedAt && completedAt > 0);
+    const content = payload.content || '';
+    const timestamp = payload.timestamp || Date.now();
+    const sessionId = payload.chatId || payload.chat_id;
+    const messageId = payload.messageId || payload.id || '';
 
-    // 只处理 AI 消息
+    // 只判 AI，其他一律不过滤（流式空片/工具调用都会被后续覆盖）
     if (sender !== 'assistant' && sender !== 'Assistant' && sender !== 'ai' && sender !== 'AI') {
       return { handled: false };
     }
+    if (!sessionId) return { handled: false };
 
-    // 工具调用或类型为工具调用跳过
-    if (isToolCall || messageType === 'tool_call' || messageType === 'tool_result') {
+    if (isDebugMode()) {
+      debugLog("Main/Persist", `收到 AI: len=${content.length}, completedAt=${payload.completedAt || 0}`);
+    }
+
+    // 从 Operit 拉会话信息
+    const sessionInfo = await sessionHelper.getSessionInfo(sessionId);
+    const chatTitle = sessionInfo.title;
+    const roleCardName = sessionInfo.characterCardName;
+    const roleCardId = '';
+
+    // ✅ 写入前剥离 attachment / XML 标签
+    const cleanContent = stripMemoryAttachment(content);
+
+    if (!cleanContent) {
+      logInfo("Main", "剥离后为空，跳过记忆写入");
       return { handled: false };
     }
 
-    // 检查内容是否完整：必须有内容且长度≥3，或者内容长度≥3且完整性标志为true
-    if (!content || content.length < 3) {
-      logDebug("Main", "AI 消息内容过短或为空，忽略: contentLength=" + (content?.length || 0));
-      return { handled: false };
-    }
-
-    if (!isComplete) {
-      logDebug("Main", "AI 消息尚未完成，忽略: completedAt=" + completedAt);
-      return { handled: false };
-    }
-
-    // 获取会话信息（已从 payload 获取）
-    const sessionId = payload.chatId || payload.chat_id;
-    if (!sessionId) {
-      return { handled: false };
-    }
-
-    // 去重
-    const contentHash = getContentHash(content);
-    if (isDuplicate(sessionId, 'assistant', timestamp, contentHash)) {
-      return { handled: false };
-    }
-
-    // 获取角色卡名称
-    let cardName = '';
-    if (characterCardId) {
-      const card = await personality.getCharacterCardById(characterCardId);
-      if (card) cardName = card.name;
-    }
-
-    const messageId = payload.messageId || payload.id || '';
-
-    // 处理 AI 回复（加入缓存区，等待下一轮 user 触发推送）
     const result = await shortTerm.processMessage(
-      sessionId,
-      'assistant',
-      content,
-      timestamp,
-      chatTitle,
-      characterCardId,
-      cardName,
-      messageId
+      sessionId, 'assistant', cleanContent, timestamp,
+      chatTitle, roleCardId, roleCardName, messageId
     );
 
-    logInfo("Main", "AI 消息已缓存: segmentId=" + result.segmentId +
-            ", triggered=" + result.triggered +
-            (result.blockId ? ", blockId=" + result.blockId : ""));
+    if (isDebugMode()) {
+      const meta = db.getSessionMeta(sessionId);
+      const scope = db.getScope(sessionId, meta?.roleCardId || '');
+      debugDumpPending("Main/ShortTerm", shortTerm.getPendingInfo());
+    }
 
     return { handled: false };
   } catch (error: any) {
@@ -185,43 +253,41 @@ export async function onMessagePersisted(event: any): Promise<any> {
 }
 
 // ============================================
-// ToolPkg 注册入口
+// 注册
 // ============================================
 
 export function registerToolPkg(): boolean {
-  logInfo("Main", "开始注册 OverMem v2");
+  logInfo("Main", "开始注册 OverMem v3");
 
-  const db = DatabaseManager.getInstance(DB_PATH);
   if (!db.initialize()) {
     logError("Main", "数据库初始化失败");
     return false;
   }
 
-  logInfo("Main", "数据库初始化成功");
+  ToolPkg.registerPromptInputHook({
+    id: "overmem_prompt_inject",
+    function: onPromptBeforeProcess
+  });
+  logInfo("Main", "已注册 Prompt 输入 Hook（注入位置）");
 
-  // 注册消息处理插件（在消息进入 AI 处理链前触发）
+  // 记录用户消息（触发点相同但只用于记忆记录）
   ToolPkg.registerMessageProcessingPlugin({
     id: "overmem_pre_process",
     function: onMessageProcessing
   });
-  logInfo("Main", "已注册消息处理插件（pre-process）");
+  logInfo("Main", "已注册 message_processing Hook");
 
-  // 注册消息持久化 Hook（用于捕获 AI 回复，加入缓存区）
   ToolPkg.registerChatMessageHook({
     id: "overmem_message_cache",
     function: onMessagePersisted
   });
   logInfo("Main", "已注册消息持久化 Hook");
 
-  // 注册 UI 路由
   ToolPkg.registerUiRoute({
     id: "overmem_dashboard",
     runtime: "compose_dsl",
     screen: DashboardScreen,
-    title: {
-      zh: "OverMem 记忆库",
-      en: "OverMem Memory Vault"
-    }
+    title: { zh: "OverMem 记忆库", en: "OverMem Memory Vault" }
   });
   logInfo("Main", "已注册 Dashboard UI");
 
@@ -229,15 +295,11 @@ export function registerToolPkg(): boolean {
     id: "overmem_nav",
     route: "toolpkg:com.operit.overmem:ui:overmem_dashboard",
     surface: "main_sidebar_plugins",
-    title: {
-      zh: "OverMem 记忆库",
-      en: "OverMem Memory"
-    },
+    title: { zh: "OverMem 记忆库", en: "OverMem Memory" },
     icon: "memory",
     order: 10
   });
   logInfo("Main", "已注册侧栏入口");
 
-  logInfo("Main", "注册完成");
   return true;
 }
