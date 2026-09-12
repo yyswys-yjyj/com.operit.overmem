@@ -1,0 +1,8 @@
+types/
+node_modules/
+dist/
+*.md
+!README.md
+*.toolpkg
+*.bat
+*.html
