@@ -1,0 +1,26 @@
+{
+  "latest":{
+    "versionID":{
+        "Main":0,
+        "Major":1,
+        "Minor":0
+    },
+    "DisplayVersion":"0.1.0"
+  },
+  "pre-release":{
+    "avalible":true,
+    "versionID":{
+        "type":1,
+        "note":"1=Alpha, 2=Beta, 3=RC",
+        "Main":0,
+        "Major":1,
+        "Minor":0
+    },
+    "DisplayVersion":"0.1.0",
+    "newfeatures":"The First Alpha Version",
+    "commit":"NULLNow"
+  },
+  "i18n-market":{
+    "note":"暂无计划"
+  }
+}

@@ -1,11 +1,13 @@
 # OverMem | 旧忆重逢
+
 <div align="center">
     <img src="https://visitor.serveryyswys.top/cnt/overmem" alt="OverMem | 旧忆重逢"></img><br>
-    <i>*那些被遗忘的对话，终将再次被记起。*</i>
+    <i>*那些被遗忘的对话，终将再次被记起。*</i><br>
+    简体中文 | <a href="./doc/README.en.md">English</a>
     <br><br>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/GitHub-OverMem-blue?style=for-the-badge&logo=github"></img></a>
     <a href="https://git.repo.archive.serveryyswys.top/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/Gitea-OverMem-green?style=for-the-badge&logo=gitea"></img></a>
-    <img src="https://img.shields.io/badge/version-0.1.0-orange?style=for-the-badge"></img>
+    <img src="https://img.shields.io/badge/version-0.1.0--Alpha-orange?style=for-the-badge"></img>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem/LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge"></img></a>
     <img src="https://img.shields.io/github/stars/yyswys-yjyj/com.operit.overmem?style=for-the-badge&logo=github&color=yellow"></img>
 </div>
@@ -72,6 +74,10 @@ graph TB
 
     加入候选集合 --> |传递| 候选集合
 ```
+
+## 最新动态
+第一个可使用的Alpha版本在今天正式发布！
+如果您在测试使用的时候有任何问题，欢迎提交issue
 
 ## 安装与使用
 在Operit AI的插件市场中安装本包后，回到主页，找的侧栏的“OverMem记忆库”入口，点击进入完成配置即可使用。
