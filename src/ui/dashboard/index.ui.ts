@@ -60,8 +60,7 @@ function compareVersion(a: { Main: number; Major: number; Minor: number },
   return 0;
 }
 
-type PageType = 'config' | 'home' | 'detail' | 'edit' | 'session_blocks' | 'confirm' | 'about';
-
+type PageType = 'config' | 'home' | 'detail' | 'edit' | 'session_blocks' | 'confirm' | 'about' | 'open_source';
 interface PageStackItem {
   type: PageType;
   data: any;
@@ -2701,18 +2700,266 @@ export default function DashboardScreen(ctx: any): any {
       ctx.UI.Column({ padding: 14 }, repoItems)
     ]));
 
-    // 卡片 1.5 —— 项目许可证
-    var licItems: any[] = [];
-    licItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'gavel', size: 18, tint: '#1A237E' }),
+    // 卡片 1.5 —— 开源项目使用说明（点击进入）
+    items.push(ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }).clickable(function() {
+        pushPage('open_source');
+      })
+    }, [
+      ctx.UI.Row({
+        modifier: ctx.Modifier.padding(14),
+        horizontalArrangement: 'spaceBetween',
+        fillMaxWidth: true,
+        verticalAlignment: 'center'
+      }, [
+        ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.weight(1) }, [
+          ctx.UI.Icon({ name: 'gavel', size: 18, tint: '#1A237E' }),
+          ctx.UI.Spacer({ width: 8 }),
+          ctx.UI.Column({}, [
+            ctx.UI.Text({ text: '开源项目使用说明', fontSize: 15, fontWeight: 'bold' }),
+            ctx.UI.Spacer({ height: 2 }),
+            ctx.UI.Text({ text: 'GPL-3.0 · LGPL-3.0 · Apache-2.0 · MIT', fontSize: 11, color: '#999' })
+          ])
+        ]),
+        ctx.UI.Icon({ name: 'chevron_right', size: 20, tint: '#999' })
+      ])
+    ]));
+
+    return ctx.UI.LazyColumn({ fillMaxSize: true, padding: 16 }, items);
+  }
+
+  // ============================================
+  // 开源项目使用说明页
+  // ============================================
+
+  function renderLibCard(lib: any) {
+    return ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 8 })
+    }, [
+      ctx.UI.Column({ padding: 12 }, [
+        ctx.UI.Row({
+          horizontalArrangement: 'spaceBetween',
+          fillMaxWidth: true,
+          verticalAlignment: 'center'
+        }, [
+          ctx.UI.Text({
+            text: lib.name,
+            fontSize: 14,
+            fontWeight: 'bold',
+            color: '#333',
+            modifier: ctx.Modifier.weight(1)
+          }),
+          ctx.UI.Surface({
+            containerColor: lib.licenseColor,
+            shape: { type: 'rounded', cornerRadius: 4 }
+          }, [
+            ctx.UI.Text({
+              text: lib.license,
+              fontSize: 10,
+              color: '#FFFFFF',
+              fontWeight: 'bold',
+              modifier: ctx.Modifier.padding({ horizontal: 6, vertical: 2 })
+            })
+          ])
+        ]),
+        ctx.UI.Spacer({ height: 4 }),
+        ctx.UI.Text({ text: lib.author, fontSize: 11, color: '#666' }),
+        ctx.UI.Spacer({ height: 4 }),
+        ctx.UI.Text({ text: lib.usage, fontSize: 12, color: '#333' }),
+        lib.url ? (function (u: string) {
+          return ctx.UI.Row({
+            verticalAlignment: 'center',
+            modifier: ctx.Modifier.padding({ top: 6 }).clickable(function() {
+              return openBrowser(u);
+            })
+          }, [
+            ctx.UI.Icon({ name: 'open_in_new', size: 14, tint: '#2196F3' }),
+            ctx.UI.Spacer({ width: 4 }),
+            ctx.UI.Text({ text: '访问项目主页', fontSize: 11, color: '#2196F3' })
+          ]);
+        })(lib.url) : ctx.UI.Spacer({ height: 0 })
+      ])
+    ]);
+  }
+
+  function renderSectionHeader(icon: string, title: string, color: string) {
+    return ctx.UI.Row({
+      horizontalArrangement: 'start',
+      fillMaxWidth: true,
+      verticalAlignment: 'center',
+      modifier: ctx.Modifier.padding({ top: 12, bottom: 6 })
+    }, [
+      ctx.UI.Icon({ name: icon, size: 16, tint: color }),
+      ctx.UI.Spacer({ width: 6 }),
+      ctx.UI.Text({ text: title, fontSize: 14, fontWeight: 'bold', color: color })
+    ]);
+  }
+
+  function renderOpenSourcePage() {
+    var items: any[] = [];
+
+    // 头部
+    items.push(ctx.UI.Row({
+      horizontalArrangement: 'start',
+      fillMaxWidth: true,
+      verticalAlignment: 'center'
+    }, [
+      ctx.UI.IconButton({ icon: 'arrow_back', onClick: function() { popPage(); return Promise.resolve(); } }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Text({ text: '项目许可证', fontSize: 15, fontWeight: 'bold' })
+      ctx.UI.Icon({ name: 'code', size: 20, tint: '#1A237E' }),
+      ctx.UI.Spacer({ width: 8 }),
+      ctx.UI.Text({ text: '开源项目使用说明', fontSize: 18, fontWeight: 'bold', modifier: ctx.Modifier.weight(1) })
     ]));
-    licItems.push(ctx.UI.Spacer({ height: 4 }));
-    licItems.push(ctx.UI.Text({ text: 'GNU 通用公共许可证 v3.0', fontSize: 13, color: '#333' }));
-    items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
-      ctx.UI.Column({ padding: 14 }, licItems)
+    items.push(ctx.UI.Spacer({ height: 8 }));
+    items.push(ctx.UI.Text({
+      text: '本页面披露 OverMem 在实现过程中使用或依赖的开源项目。',
+      fontSize: 12,
+      color: '#666'
+    }));
+
+    // —— 1. OverMem 自身 ——
+    items.push(renderSectionHeader('memory', '本项目', '#1A237E'));
+    items.push(renderLibCard({
+      name: 'OverMem 记忆库',
+      author: 'Copyright (C) 2026 yyswys-yjyj',
+      license: 'GPL-3.0',
+      licenseColor: '#0b9ff0',
+      usage: '本项目自身，为 Operit AI 提供智能对话记忆管理能力。',
+      url: REPO_URL
+    }));
+
+    // —— 2. 宿主平台 ——
+    items.push(renderSectionHeader('smart_toy', '宿主平台', '#FF6640'));
+    items.push(renderLibCard({
+      name: 'Operit AI',
+      author: 'Copyright (C) AAswordman',
+      license: 'LGPL-3.0-only',
+      licenseColor: '#FF6640',
+      usage: '宿主平台。OverMem 通过其 ToolPkg 运行时、Compose DSL、Hook 与工具调用能力运行。',
+      url: 'https://github.com/AAswordman/Operit'
+    }));
+
+    // —— 3. 直接依赖 ——
+    items.push(renderSectionHeader('link', '直接依赖', '#1A237E'));
+
+    items.push(renderLibCard({
+      name: 'OkHttp',
+      author: 'Copyright Square, Inc.（现由 Commonhaus Foundation / lysine.dev 托管）',
+      license: 'Apache-2.0',
+      licenseColor: '#2196F3',
+      usage: 'HTTP 客户端。用于调用 AI 供应商接口、检查更新。',
+      url: 'https://lysine.dev/okhttp/'
+    }));
+
+    items.push(renderLibCard({
+      name: 'Android SQLite',
+      author: 'Copyright The Android Open Source Project',
+      license: 'Apache-2.0',
+      licenseColor: '#2196F3',
+      usage: '本地数据库引擎。用于 OverMem 记忆库持久化。',
+      url: 'https://developer.android.com/reference/android/database/sqlite/package-summary'
+    }));
+
+    items.push(renderLibCard({
+      name: 'TypeScript',
+      author: 'Copyright Microsoft Corporation',
+      license: 'Apache-2.0',
+      licenseColor: '#2196F3',
+      usage: '开发语言与编译器。OverMem 源码使用 TypeScript 编写，编译为 JavaScript 后运行。',
+      url: 'https://github.com/microsoft/TypeScript'
+    }));
+
+    // —— 4. 经平台间接使用 ——
+    items.push(renderSectionHeader('extension', '经平台间接使用', '#666'));
+    items.push(ctx.UI.Text({
+      text: '以下组件由 Operit 平台内部使用，OverMem 通过其接口间接受益，此处仅作透明披露。',
+      fontSize: 11,
+      color: '#999',
+      modifier: ctx.Modifier.padding({ bottom: 6 })
+    }));
+
+    items.push(renderLibCard({
+      name: 'AndroidX Compose Material3 / Material Icons',
+      author: 'Copyright Google LLC / The Android Open Source Project',
+      license: 'Apache-2.0',
+      licenseColor: '#2196F3',
+      usage: 'Compose DSL 底层 UI 组件与图标（Card、Button、TextField、Icon 等）。',
+      url: 'https://developer.android.com/jetpack/compose'
+    }));
+
+    items.push(renderLibCard({
+      name: 'QuickJS',
+      author: 'Copyright Fabrice Bellard and Charlie Gordon',
+      license: 'MIT',
+      licenseColor: '#4CAF50',
+      usage: 'Operit 内部 JavaScript 运行时。OverMem 编译后的 JS 代码在其上执行。',
+      url: 'https://quickjs.org/'
+    }));
+
+    // —— 5. 完整许可证文本 ——
+    items.push(renderSectionHeader('description', '完整许可证文本', '#1A237E'));
+
+    var licenseLinks = [
+      { label: 'GNU GPL v3.0',     url: 'https://www.gnu.org/licenses/gpl-3.0.txt' },
+      { label: 'GNU LGPL v3.0',    url: 'https://www.gnu.org/licenses/lgpl-3.0.txt' },
+      { label: 'Apache License 2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0.txt' },
+      { label: 'MIT License',       url: 'https://opensource.org/licenses/MIT' }
+    ];
+
+    for (var li = 0; li < licenseLinks.length; li++) {
+      (function (link) {
+        items.push(ctx.UI.Card({
+          elevation: 1,
+          modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 6 }).clickable(function() {
+            return openBrowser(link.url);
+          })
+        }, [
+          ctx.UI.Row({
+            modifier: ctx.Modifier.padding(12),
+            horizontalArrangement: 'spaceBetween',
+            fillMaxWidth: true,
+            verticalAlignment: 'center'
+          }, [
+            ctx.UI.Row({ verticalAlignment: 'center' }, [
+              ctx.UI.Icon({ name: 'description', size: 16, tint: '#666' }),
+              ctx.UI.Spacer({ width: 8 }),
+              ctx.UI.Text({ text: link.label, fontSize: 13, color: '#333' })
+            ]),
+            ctx.UI.Icon({ name: 'open_in_new', size: 16, tint: '#999' })
+          ])
+        ]));
+      })(licenseLinks[li]);
+    }
+
+    // —— 6. 无担保声明 ——
+    items.push(ctx.UI.Card({
+      elevation: 1,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ top: 12, bottom: 10 })
+    }, [
+      ctx.UI.Column({ padding: 14 }, [
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'warning', size: 16, tint: '#FF9800' }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({ text: '无担保声明', fontSize: 13, fontWeight: 'bold', color: '#FF9800' })
+        ]),
+        ctx.UI.Spacer({ height: 6 }),
+        ctx.UI.Text({
+          text: '本软件按“原样”提供，不附带任何形式的担保，包括但不限于适销性或特定用途适用性的默示担保。在任何情况下，作者或版权持有人均不对因本软件或本软件的使用而产生的任何索赔、损害或其他责任负责。',
+          fontSize: 12,
+          color: '#666'
+        })
+      ])
     ]));
+
+    // 尾部提示
+    items.push(ctx.UI.Text({
+      text: '本插件运行所依赖的 Operit 平台还使用了若干其他开源库，完整列表可在 Operit 应用的“关于 → 开源许可”中查看。',
+      fontSize: 11,
+      color: '#999',
+      modifier: ctx.Modifier.padding({ top: 4, bottom: 24 })
+    }));
 
     return ctx.UI.LazyColumn({ fillMaxSize: true, padding: 16 }, items);
   }
@@ -2768,6 +3015,7 @@ export default function DashboardScreen(ctx: any): any {
       case 'session_blocks': return renderSessionBlocksPage();
       case 'confirm': return renderConfirmPage();
       case 'about': return renderAboutPage();
+      case 'open_source': return renderOpenSourcePage();
       default: return ctx.UI.Text({ text: '未知页面' });
     }
   }
