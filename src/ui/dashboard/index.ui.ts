@@ -2187,7 +2187,7 @@ export default function DashboardScreen(ctx: any): any {
       ? '安装中…'
       : (clientInstalled
           ? (clientHasUpdate() ? '更新客户端' : '重新安装')
-          : '安装完整客户端');
+          : '安装客户端');
 
     clientItems.push(ctx.UI.Row({
       horizontalArrangement: 'spaceEvenly',
