@@ -1378,14 +1378,19 @@ export default function DashboardScreen(ctx: any): any {
       ctx.UI.Text({ text: '智能对话记忆管理', fontSize: 13, color: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ height: 12 }),
 
-      ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true, modifier: ctx.Modifier.padding({ bottom: 8 }) }, [
+            ctx.UI.LazyRow({
+        horizontalArrangement: 'start',
+        fillMaxWidth: true,
+        spacing: 8,
+        modifier: ctx.Modifier.padding({ bottom: 8 })
+      }, [
         ctx.UI.Button({
           text: '欢迎',
           onClick: function() { return onTabChange('welcome'); },
           leadingIcon: ctx.UI.Icon({ name: 'home', size: 18 }),
           containerColor: homeTab === 'welcome' ? cs.primary : cs.surfaceVariant,
           contentColor: homeTab === 'welcome' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         }),
         ctx.UI.Button({
           text: '记忆管理',
@@ -1393,7 +1398,7 @@ export default function DashboardScreen(ctx: any): any {
           leadingIcon: ctx.UI.Icon({ name: 'book', size: 18 }),
           containerColor: homeTab === 'sessions' ? cs.primary : cs.surfaceVariant,
           contentColor: homeTab === 'sessions' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         }),
         ctx.UI.Button({
           text: '加载项',
@@ -1401,7 +1406,7 @@ export default function DashboardScreen(ctx: any): any {
           leadingIcon: ctx.UI.Icon({ name: 'extension', size: 18 }),
           containerColor: homeTab === 'addons' ? cs.primary : cs.surfaceVariant,
           contentColor: homeTab === 'addons' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         }),
         ctx.UI.Button({
           text: '设置',
@@ -1409,7 +1414,7 @@ export default function DashboardScreen(ctx: any): any {
           leadingIcon: ctx.UI.Icon({ name: 'settings', size: 18 }),
           containerColor: homeTab === 'settings' ? cs.primary : cs.surfaceVariant,
           contentColor: homeTab === 'settings' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         })
       ]),
 
@@ -1510,14 +1515,19 @@ export default function DashboardScreen(ctx: any): any {
 
   function renderSessionsTab() {
     return ctx.UI.Column({ modifier: ctx.Modifier.weight(1) }, [
-      ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true, modifier: ctx.Modifier.padding({ bottom: 8 }) }, [
+      ctx.UI.LazyRow({
+        horizontalArrangement: 'start',
+        fillMaxWidth: true,
+        spacing: 8,
+        modifier: ctx.Modifier.padding({ bottom: 8 })
+      }, [
         ctx.UI.Button({
           text: '总览',
           onClick: function() { return onSessionsSubTabChange('overview'); },
           leadingIcon: ctx.UI.Icon({ name: 'list', size: 16 }),
           containerColor: sessionsSubTab === 'overview' ? cs.primary : cs.surfaceVariant,
           contentColor: sessionsSubTab === 'overview' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         }),
         ctx.UI.Button({
           text: '会话',
@@ -1525,7 +1535,7 @@ export default function DashboardScreen(ctx: any): any {
           leadingIcon: ctx.UI.Icon({ name: 'chat', size: 16 }),
           containerColor: sessionsSubTab === 'sessions' ? cs.primary : cs.surfaceVariant,
           contentColor: sessionsSubTab === 'sessions' ? cs.onPrimary : cs.onSurfaceVariant,
-          modifier: ctx.Modifier.weight(1).padding(4)
+          modifier: ctx.Modifier.width(120).padding(4)
         })
       ]),
       sessionsSubTab === 'overview' ? renderOverviewTab() : renderSessionsListTab()
