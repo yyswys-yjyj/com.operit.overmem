@@ -18,7 +18,7 @@
     },
     "DisplayVersion":"0.1.1",
     "newfeatures":"本次更新包含UI视觉修改、新功能（画大饼版），以及新增独立管理应用（第一次做Android APP，还是和插件联动的）",
-    "commit":"NULLNow"
+    "commit":"74a067c"
   },
   "i18n-market":{
     "note":"暂无计划"
