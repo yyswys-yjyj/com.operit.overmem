@@ -7,3 +7,15 @@ dist/
 *.toolpkg
 *.bat
 *.html
+app/.gradle/
+app/build/
+app/app/build/
+app/.kotlin/
+app/.idea/
+app/shelf/
+app/workspace.xml
+app/httpRequests/
+app/queries/
+app/dataSources/
+app/dataSources.local.xml
+app/local.properties

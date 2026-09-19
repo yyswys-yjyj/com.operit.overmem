@@ -2,10 +2,10 @@
   "latest":{
     "versionID":{
         "Main":0,
-        "Major":1,
+        "Major":0,
         "Minor":0
     },
-    "DisplayVersion":"0.1.0"
+    "DisplayVersion":"0.1.1"
   },
   "pre-release":{
     "avalible":true,
@@ -14,10 +14,10 @@
         "note":"1=Alpha, 2=Beta, 3=RC",
         "Main":0,
         "Major":1,
-        "Minor":0
+        "Minor":1
     },
-    "DisplayVersion":"0.1.0",
-    "newfeatures":"The First Alpha Version",
+    "DisplayVersion":"0.1.1",
+    "newfeatures":"本次更新包含UI视觉修改、新功能（画大饼版），以及新增独立管理应用（第一次做Android APP，还是和插件联动的）",
     "commit":"NULLNow"
   },
   "i18n-market":{

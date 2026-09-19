@@ -1,4 +1,4 @@
-package com.serveryyswys.overmem.ui.features.settingshub
+package com.serveryyswys.overmem.data.settings
 
 import org.json.JSONArray
 import org.json.JSONObject

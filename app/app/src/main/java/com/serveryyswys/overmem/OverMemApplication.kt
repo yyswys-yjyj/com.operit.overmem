@@ -1,4 +1,11 @@
 package com.serveryyswys.overmem
 
-class OverMemApplication {
+import android.app.Application
+import com.serveryyswys.overmem.util.CrashHandler
+
+class OverMemApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        CrashHandler.install(this)
+    }
 }
