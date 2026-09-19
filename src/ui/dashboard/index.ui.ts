@@ -84,10 +84,10 @@ function colorScheme(ctx: any): any {
 
 function getVersionTypeColor(type: string): string {
   switch (type) {
-    case 'Alpha': return VERSION_ALPHA_COLOR;
-    case 'Beta': return VERSION_BETA_COLOR;
-    case 'RC': return VERSION_RC_COLOR;
-    case 'Release': return VERSION_RELEASE_COLOR;
+    case 'Alpha': return '#FF6640';
+    case 'Beta': return '#d400ff';
+    case 'RC': return '#0e0470';     // 补全为 6 位
+    case 'Release': return '#0b9ff0'; // 补全为 6 位
     default: return '#666666';
   }
 }
