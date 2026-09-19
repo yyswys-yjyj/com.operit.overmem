@@ -28,9 +28,8 @@ const LOG_FILE_PATH = "/storage/emulated/0/Download/Operit/overmem/log.txt";
 // ============================================
 
 const CURRENT_VERSION = { Main: 0, Major: 1, Minor: 0 };
-const CURRENT_VERSION_TYPE = 'Alpha';   // 'Alpha' | 'Beta' | 'RC' | 'Release'
+const CURRENT_VERSION_TYPE = 'Alpha';
 
-// 检查更新源（按顺序尝试）
 const UPDATE_URLS = [
   "https://raw.githubusercontent.com/yyswys-yjyj/com.operit.overmem/refs/heads/main/api/manifest.json",
   "https://cdn.jsdelivr.net/gh/yyswys-yjyj/com.operit.overmem@main/api/manifest.json",
@@ -39,19 +38,60 @@ const UPDATE_URLS = [
 
 const REPO_URL = "https://github.com/yyswys-yjyj/com.operit.overmem/";
 
+// ============================================
+// 独立客户端
+// ============================================
+
+const CLIENT_PACKAGE_NAME = 'com.serveryyswys.overmem';
+const CLIENT_VERSION_NAME = '0.1.0';
+const CLIENT_VERSION_CODE = 1;
+const CLIENT_APK_RESOURCE_KEY = 'overmem_apk';
+const CLIENT_APK_FILENAME = 'com.serveryyswys.overmem.apk';
+
+// ============================================
+// 加载项
+// ============================================
+
+const ADDON_RUNTIME_AVAILABLE = false;
+
+// ============================================
+// 语义色（不随主题变化）
+// ============================================
+
+// 记忆层级：绿 / 橙 / 紫
+const LEVEL_SHORT_COLOR = '#4CAF50';
+const LEVEL_MID_COLOR   = '#FF9800';
+const LEVEL_LONG_COLOR  = '#9C27B0';
+
+// 记忆状态：活跃红 / 废弃灰 / 普通蓝灰
+const STATE_ACTIVE_COLOR = '#F44336';
+const STATE_TRASH_COLOR  = '#9E9E9E';
+const STATE_NORMAL_COLOR = '#607D8B';
+
+// 版本类型
+const VERSION_ALPHA_COLOR   = '#FF6640';
+const VERSION_BETA_COLOR    = '#D400FF';
+const VERSION_RC_COLOR      = '#0E0470';
+const VERSION_RELEASE_COLOR = '#0B9FF0';
+
+// ============================================
+// 主题色助手
+// ============================================
+
+function colorScheme(ctx: any): any {
+  return ctx.MaterialTheme.colorScheme;
+}
+
 function getVersionTypeColor(type: string): string {
   switch (type) {
-    case 'Alpha': return '#FF6640';
-    case 'Beta': return '#d400ff';
-    case 'RC': return '#0e0470';     // 补全为 6 位
-    case 'Release': return '#0b9ff0'; // 补全为 6 位
+    case 'Alpha': return VERSION_ALPHA_COLOR;
+    case 'Beta': return VERSION_BETA_COLOR;
+    case 'RC': return VERSION_RC_COLOR;
+    case 'Release': return VERSION_RELEASE_COLOR;
     default: return '#666666';
   }
 }
 
-/**
- * 版本比较：返回 1 表示 a > b，-1 表示 a < b，0 表示相等
- */
 function compareVersion(a: { Main: number; Major: number; Minor: number },
                        b: { Main: number; Major: number; Minor: number }): number {
   if (a.Main !== b.Main) return a.Main > b.Main ? 1 : -1;
@@ -60,7 +100,7 @@ function compareVersion(a: { Main: number; Major: number; Minor: number },
   return 0;
 }
 
-type PageType = 'config' | 'home' | 'detail' | 'edit' | 'session_blocks' | 'confirm' | 'about' | 'open_source';
+type PageType = 'config' | 'home' | 'detail' | 'edit' | 'session_blocks' | 'confirm' | 'about' | 'open_source' | 'addons';
 interface PageStackItem {
   type: PageType;
   data: any;
@@ -74,7 +114,7 @@ interface ConfirmPageData {
   onConfirm: () => void | Promise<void>;
 }
 
-type HomeTab = 'welcome' | 'sessions' | 'settings';
+type HomeTab = 'welcome' | 'sessions' | 'addons' | 'settings';
 type SessionsSubTab = 'overview' | 'sessions';
 
 // ============================================
@@ -130,9 +170,9 @@ function getLevelLabel(level: MemoryLevel): string {
 
 function getLevelColor(level: MemoryLevel): string {
   switch (level) {
-    case 'short': return '#4CAF50';
-    case 'mid': return '#FF9800';
-    case 'long': return '#9C27B0';
+    case 'short': return LEVEL_SHORT_COLOR;
+    case 'mid': return LEVEL_MID_COLOR;
+    case 'long': return LEVEL_LONG_COLOR;
   }
 }
 
@@ -154,9 +194,9 @@ function getStateLabel(state: MemoryState): string {
 
 function getStateColor(state: MemoryState): string {
   switch (state) {
-    case 'active': return '#F44336';
-    case 'trash': return '#9E9E9E';
-    default: return '#607D8B';
+    case 'active': return STATE_ACTIVE_COLOR;
+    case 'trash': return STATE_TRASH_COLOR;
+    default: return STATE_NORMAL_COLOR;
   }
 }
 
@@ -187,12 +227,15 @@ function formatFileSize(bytes: number): string {
   return (bytes / 1073741824).toFixed(1) + ' GB';
 }
 
+let _animTimer: number | null = null;
+
 // ============================================
 // 主 Screen
 // ============================================
 
 export default function DashboardScreen(ctx: any): any {
-  // ---- 同步初始化 ----
+  const cs = ctx.MaterialTheme.colorScheme;
+
   logInfo("UI", "同步初始化开始...");
   var completed = isSetupComplete();
   var settings = loadSettings();
@@ -204,13 +247,21 @@ export default function DashboardScreen(ctx: any): any {
   var initialApiKey = isValid ? (settings?.apiKey || '') : '';
   var initialModel = isValid ? (settings?.model || '') : '';
   var initialModels = isValid ? (settings?.models || []) : [];
-  var initialInitTimestamp = isValid ? (settings?.initTimestamp || 0) : 0;
+  var initialInitTimestamp = 0;
   var initialDays = 0;
-  if (initialInitTimestamp > 0) {
-    initialDays = Math.floor((Date.now() - initialInitTimestamp) / (1000*60*60*24));
+  try {
+    if (isValid) {
+      var initDb = DatabaseManager.getInstance(DB_PATH);
+      var initCfg = initDb.getConfig();
+      initialInitTimestamp = initCfg.initTimestamp || 0;
+      if (initialInitTimestamp > 0) {
+        initialDays = Math.floor((Date.now() - initialInitTimestamp) / (1000*60*60*24));
+      }
+    }
+  } catch (e: any) {
+    logWarn("UI", "读取 initTimestamp 失败: " + e.message);
   }
 
-  // ---- 同步读取数据库统计 ----
   var initialShortCount = 0;
   var initialMidCount = 0;
   var initialLongCount = 0;
@@ -251,7 +302,6 @@ export default function DashboardScreen(ctx: any): any {
         longList = longList.concat(lList);
       }
 
-      // 去重
       var sm: any = {}, mm: any = {}, lm: any = {};
       for (var j = 0; j < shortList.length; j++) if (shortList[j].id) sm[shortList[j].id!] = shortList[j];
       for (var k = 0; k < midList.length; k++) if (midList[k].id) mm[midList[k].id!] = midList[k];
@@ -286,7 +336,6 @@ export default function DashboardScreen(ctx: any): any {
   var [configError, setConfigError] = ctx.useState('configError', initError);
   var [isLoadingModels, setIsLoadingModels] = ctx.useState('isLoadingModels', false);
 
-  // 记忆配置
   var [shortThreshold, setShortThreshold] = ctx.useState('shortThreshold', 20);
   var [midThreshold, setMidThreshold] = ctx.useState('midThreshold', 40);
   var [longThreshold, setLongThreshold] = ctx.useState('longThreshold', 20);
@@ -304,13 +353,13 @@ export default function DashboardScreen(ctx: any): any {
   var [availableCards, setAvailableCards] = ctx.useState('availableCards', [] as { id: string; name: string }[]);
   var [isLoadingCards, setIsLoadingCards] = ctx.useState('isLoadingCards', false);
 
-  // 主页
   var [homeTab, setHomeTab] = ctx.useState('homeTab', 'welcome' as HomeTab);
   var [sessionsSubTab, setSessionsSubTab] = ctx.useState('sessionsSubTab', 'overview' as SessionsSubTab);
   var [loading, setLoading] = ctx.useState('loading', false);
   var [dataLoaded, setDataLoaded] = ctx.useState('dataLoaded', false);
   var [banner, setBanner] = ctx.useState('banner', { visible: false, message: '', type: 'info' });
   var [tick, setTick] = ctx.useState('tick', 0);
+  var [animProgress, setAnimProgress] = ctx.useState('animProgress', 1);
   var _bannerTimer: number | null = null;
 
   var [shortBlocks, setShortBlocks] = ctx.useState('shortBlocks', initialShortBlocks);
@@ -333,11 +382,19 @@ export default function DashboardScreen(ctx: any): any {
   var [logSizeText, setLogSizeText] = ctx.useState('logSizeText', '0 B');
   var [pendingInfoText, setPendingInfoText] = ctx.useState('pendingInfoText', '空');
   var [consolidatingSessionId, setConsolidatingSessionId] = ctx.useState('consolidatingSessionId', '' as string);
-  var [consolidatingLevel, setConsolidatingLevel] = ctx.useState('consolidatingLevel', '' as string); // 'mid' | 'long'
+  var [consolidatingLevel, setConsolidatingLevel] = ctx.useState('consolidatingLevel', '' as string);
   var [previewEnabled, setPreviewEnabled] = ctx.useState('previewEnabled', false);
   var [updateChecking, setUpdateChecking] = ctx.useState('updateChecking', false);
   var [updateResult, setUpdateResult] = ctx.useState('updateResult', null as any);
   var [updateError, setUpdateError] = ctx.useState('updateError', '');
+
+  var [clientInstalled, setClientInstalled] = ctx.useState('clientInstalled', false);
+  var [clientVersionName, setClientVersionName] = ctx.useState('clientVersionName', '' as string);
+  var [clientVersionCode, setClientVersionCode] = ctx.useState('clientVersionCode', 0);
+  var [clientInstalling, setClientInstalling] = ctx.useState('clientInstalling', false);
+  var [clientStatus, setClientStatus] = ctx.useState('clientStatus', '' as string);
+  var [addonCount, setAddonCount] = ctx.useState('addonCount', 0);
+  var [addonList, setAddonList] = ctx.useState('addonList', [] as any[]);
 
   // ---- 工具函数 ----
   function showBanner(msg: string, type: 'info'|'success'|'error' = 'info') {
@@ -360,12 +417,9 @@ export default function DashboardScreen(ctx: any): any {
     setPageStack(s);
     setCurrentPage(type);
     setPageData(data || null);
+    startEnterAnimation();
   }
 
-  /**
-   * 弹出页面栈
-   * @param n 弹出层数（默认 1）
-   */
   function popPage(n?: number) {
     var depth = n || 1;
     var stack = pageStack.slice();
@@ -387,11 +441,9 @@ export default function DashboardScreen(ctx: any): any {
     setPageStack(stack);
     setCurrentPage(cur);
     setPageData(curData);
+    startEnterAnimation();
   }
 
-  /**
-   * 跳转到通用确认页
-   */
   function pushConfirm(data: ConfirmPageData) {
     var s = pageStack.slice();
     s.push({ type: currentPage, data: pageData });
@@ -402,7 +454,29 @@ export default function DashboardScreen(ctx: any): any {
 
   function forceRerender() { setTick(tick + 1); }
 
-  // ---- 加载配置 ----
+  // 页面过渡动画：200ms 淡入（ease-out cubic）
+  function startEnterAnimation() {
+    if (_animTimer !== null) {
+      clearInterval(_animTimer);
+      _animTimer = null;
+    }
+    setAnimProgress(0);
+    var start = Date.now();
+    var duration = 200;
+    _animTimer = setInterval(function() {
+      var elapsed = Date.now() - start;
+      var p = Math.min(1, elapsed / duration);
+      var eased = 1 - Math.pow(1 - p, 3);
+      setAnimProgress(eased);
+      if (p >= 1) {
+        if (_animTimer !== null) {
+          clearInterval(_animTimer);
+          _animTimer = null;
+        }
+      }
+    }, 16);
+  }
+
   function loadMemoryConfig() {
     try {
       var db = DatabaseManager.getInstance(DB_PATH);
@@ -424,6 +498,13 @@ export default function DashboardScreen(ctx: any): any {
       setPersonalityCardId(c.personalityCardId || '');
       setPersonalityCustomText(c.personalityCustomText || '');
       setPersonalityName(c.personalityName || '');
+      if (c.initTimestamp && c.initTimestamp > 0) {
+        var days = Math.floor((Date.now() - c.initTimestamp) / (1000 * 60 * 60 * 24));
+        setDaysSinceInit(days);
+        setInitTimestamp(c.initTimestamp);
+      } else {
+        setDaysSinceInit(0);
+      }
     } catch (e: any) {
       logError("UI", "加载配置失败: " + e.message);
     }
@@ -455,7 +536,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 加载角色卡 ----
   async function loadCharacterCards() {
     logInfo("UI", "loadCharacterCards 触发（被动）");
     setIsLoadingCards(true);
@@ -476,7 +556,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 刷新数据 ----
   async function refreshData() {
     setLoading(true);
     try {
@@ -490,7 +569,6 @@ export default function DashboardScreen(ctx: any): any {
         var info = await sessionHelper.getSessionInfo(sessionList[si].sessionId);
         if (info.title && info.title !== sessionList[si].title) {
           sessionList[si].title = info.title;
-          // 顺便写回 DB
           db.getOrCreateSessionMeta(sessionList[si].sessionId, info.title, sessionList[si].roleCardId, info.characterCardName);
         }
         if (info.characterCardName && info.characterCardName !== sessionList[si].roleCardName) {
@@ -542,6 +620,10 @@ export default function DashboardScreen(ctx: any): any {
 
       loadMemoryConfig();
 
+      // addon
+      setAddonCount(0);
+      setAddonList([]);
+
       setTimeGreeting(getTimeGreeting());
       setTimeIcon(getTimeIcon());
       setGreeting(getRandomGreeting());
@@ -574,7 +656,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 暂存区同步 ----
   async function syncPendingArea() {
     logInfo("UI", "触发暂存区同步");
     setLoading(true);
@@ -605,7 +686,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 强制整理：短期 → 中期 ----
   async function forceMidConsolidate(sessionId: string): Promise<void> {
     logInfo("UI", "强制 短期→中期 整理: session=" + sessionId);
     if (consolidatingSessionId) {
@@ -636,7 +716,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 强制整理：中期 → 长期 ----
   async function forceLongConsolidate(sessionId: string): Promise<void> {
     logInfo("UI", "强制 中期→长期 整理: session=" + sessionId);
     if (consolidatingSessionId) {
@@ -667,7 +746,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 日志管理 ----
   function updateLogSize() {
     var sz = getLogFileSize();
     setLogSize(sz);
@@ -683,9 +761,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  /**
-   * 检查更新：按顺序尝试 UPDATE_URLS，任一成功即停止
-   */
   async function handleCheckUpdate() {
     logInfo("UI", "开始检查更新...");
     setUpdateChecking(true);
@@ -721,7 +796,6 @@ export default function DashboardScreen(ctx: any): any {
         return;
       }
 
-      // 解析
       var latest = manifest.latest || null;
       var pre = manifest['pre-release'] || null;
 
@@ -749,10 +823,7 @@ export default function DashboardScreen(ctx: any): any {
         };
       }
 
-      setUpdateResult({
-        latest: latestResult,
-        pre: preResult
-      });
+      setUpdateResult({ latest: latestResult, pre: preResult });
       logInfo("UI", "检查更新完成");
     } catch (e: any) {
       logError("UI", "检查更新失败: " + e.message);
@@ -762,9 +833,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  /**
-   * 用 Java Bridge OkHttp 拉取文本
-   */
   async function fetchText(url: string): Promise<string> {
     var OkHttpClient = Java.type("okhttp3.OkHttpClient");
     var Request = Java.type("okhttp3.Request");
@@ -793,9 +861,6 @@ export default function DashboardScreen(ctx: any): any {
     return body;
   }
 
-  /**
-   * 用系统 intent 打开浏览器
-   */
   async function openBrowser(url: string): Promise<void> {
     try {
       await Tools.System.intent({
@@ -809,7 +874,6 @@ export default function DashboardScreen(ctx: any): any {
     }
   }
 
-  // ---- 配置页逻辑 ----
   async function handleFetchModels() {
     if (!basicUrl.trim()) { setConfigError('请输入 Basic URL'); return; }
     if (!apiKey.trim()) { setConfigError('请输入 API Key'); return; }
@@ -858,12 +922,22 @@ export default function DashboardScreen(ctx: any): any {
       apiKey: apiKey.trim(),
       model: model.trim(),
       models: models,
-      encryptVersion: 1,
-      initTimestamp: now
+      encryptVersion: 1
     };
 
     if (!saveSettings(s)) { setConfigError('保存配置失败'); return; }
     if (!markSetupComplete()) { setConfigError('标记初始化失败'); return; }
+
+    // 写入 mem.db 的 config（唯一存储位置）
+    try {
+      var initDb2 = DatabaseManager.getInstance(DB_PATH);
+      var initCfg2 = initDb2.getConfig();
+      initCfg2.initTimestamp = now;
+      initDb2.saveConfig(initCfg2);
+      logInfo("UI", "initTimestamp 已写入 DB: " + now);
+    } catch (e: any) {
+      logWarn("UI", "写入 DB initTimestamp 失败: " + e.message);
+    }
 
     setInitTimestamp(now);
     setDaysSinceInit(0);
@@ -872,9 +946,58 @@ export default function DashboardScreen(ctx: any): any {
     setTimeout(function() { refreshData(); }, 100);
   }
 
-  // ---- Tab 切换 ----
+  async function refreshClientStatus() {
+    try {
+      const context = Java.getApplicationContext();
+      const pm = context.getPackageManager();
+      const info = pm.getPackageInfo(CLIENT_PACKAGE_NAME, 0);
+
+      setClientInstalled(true);
+      setClientVersionName(String(info.versionName || ''));
+      setClientVersionCode(Number(info.longVersionCode || info.versionCode || 0));
+    } catch (e: any) {
+      setClientInstalled(false);
+      setClientVersionName('');
+      setClientVersionCode(0);
+    }
+  }
+
+  function clientHasUpdate(): boolean {
+    if (!clientInstalled) return false;
+    return clientVersionCode < CLIENT_VERSION_CODE;
+  }
+
+  async function installClient() {
+    if (clientInstalling) return;
+    setClientInstalling(true);
+    setClientStatus('正在准备 APK…');
+
+    try {
+      const srcPath = await ToolPkg.readResource(CLIENT_APK_RESOURCE_KEY, CLIENT_APK_FILENAME);
+      if (!srcPath) throw new Error('readResource 返回空');
+
+      const exists = await Tools.Files.exists(srcPath);
+      if (!exists || !exists.exists) throw new Error('APK 不存在: ' + srcPath);
+
+      setClientStatus('APK 已就绪（' + Math.round(exists.size / 1024) + ' KB），正在打开安装程序…');
+      logInfo("UI", "installApp: " + srcPath);
+
+      const result = await Tools.System.installApp(srcPath);
+      if (result && result.success === false) {
+        throw new Error(result.details || '安装器返回失败');
+      }
+      setClientStatus('已发起安装，请按系统提示完成');
+    } catch (e: any) {
+      logError("UI", "安装客户端失败: " + (e.message || e));
+      setClientStatus('安装失败: ' + (e.message || e));
+    } finally {
+      setClientInstalling(false);
+    }
+  }
+
   function onTabChange(tab: HomeTab) {
     setHomeTab(tab);
+    startEnterAnimation();
     if (tab === 'welcome') {
       return refreshData();
     }
@@ -882,9 +1005,14 @@ export default function DashboardScreen(ctx: any): any {
       setSessionsSubTab('overview');
       return refreshData();
     }
+    if (tab === 'addons') {
+      return Promise.resolve();
+    }
+
     if (tab === 'settings') {
       loadMemoryConfig();
       updateLogSize();
+      refreshClientStatus();
       try {
         var stm = new ShortTermMemory();
         var pendingInfo = stm.getPendingInfo();
@@ -906,19 +1034,36 @@ export default function DashboardScreen(ctx: any): any {
 
   function onSessionsSubTabChange(sub: SessionsSubTab) {
     setSessionsSubTab(sub);
+    startEnterAnimation();
     if (sub === 'overview') {
       return refreshData();
     }
     return Promise.resolve();
   }
 
-  // ---- 首次加载 ----
   ctx.useMemo('initLoad', function() {
     if (isValid && !dataLoaded) {
       setTimeout(function() { refreshData(); }, 100);
     }
     return;
   }, []);
+
+  function renderStatRow(
+    leftLabel: string, leftValue: string, leftColor: string, leftIcon: string,
+    rightLabel: string, rightValue: string, rightColor: string, rightIcon: string
+  ) {
+    return ctx.UI.Row({
+      fillMaxWidth: true,
+      horizontalArrangement: 'start'
+    }, [
+      ctx.UI.Box({ modifier: ctx.Modifier.weight(1) }, [
+        renderStatCard(leftLabel, leftValue, leftColor, leftIcon)
+      ]),
+      ctx.UI.Box({ modifier: ctx.Modifier.weight(1) }, [
+        renderStatCard(rightLabel, rightValue, rightColor, rightIcon)
+      ])
+    ]);
+  }
 
   // ============================================
   // 卡片渲染
@@ -927,19 +1072,19 @@ export default function DashboardScreen(ctx: any): any {
   function renderStatCard(label: string, value: string, color: string, icon: string) {
     return ctx.UI.Card({
       elevation: 2,
-      modifier: ctx.Modifier.weight(1).padding(4)
+      modifier: ctx.Modifier.fillMaxWidth().padding(4)
     }, [
       ctx.UI.Column({ padding: 14, horizontalAlignment: 'start' }, [
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
           ctx.UI.Icon({ name: icon, size: 18, tint: color }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: label, fontSize: 13, color: '#666' })
+          ctx.UI.Text({ text: label, fontSize: 13, color: cs.onSurfaceVariant })
         ]),
         ctx.UI.Spacer({ height: 4 }),
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
           ctx.UI.Text({ text: value, fontSize: 22, fontWeight: 'bold', color: color }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: '个', fontSize: 13, color: '#999' })
+          ctx.UI.Text({ text: '个', fontSize: 13, color: cs.onSurfaceVariant })
         ])
       ])
     ]);
@@ -966,7 +1111,6 @@ export default function DashboardScreen(ctx: any): any {
       shape: { type: 'rounded', cornerRadius: 8 }
     }, [
       ctx.UI.Column({ padding: 12 }, [
-        // 头部：层级 + 状态 + 时间 + 距离
         ctx.UI.Row({
           horizontalArrangement: 'spaceBetween',
           fillMaxWidth: true,
@@ -976,7 +1120,6 @@ export default function DashboardScreen(ctx: any): any {
             ctx.UI.Icon({ name: getLevelIcon(level), size: 14, tint: color }),
             ctx.UI.Spacer({ width: 4 }),
             ctx.UI.Text({ text: label, fontSize: 11, color: color, fontWeight: 'bold' }),
-            // 活跃标记
             state === 'active' ? ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ start: 6 }) }, [
               ctx.UI.Icon({ name: 'star', size: 12, tint: stateColor }),
               ctx.UI.Spacer({ width: 2 }),
@@ -990,52 +1133,51 @@ export default function DashboardScreen(ctx: any): any {
             )
           ]),
           ctx.UI.Row({ verticalAlignment: 'center' }, [
-            ctx.UI.Text({ text: '距离: ' + dist.toFixed(1), fontSize: 10, color: '#999' }),
+            ctx.UI.Text({ text: '距离: ' + dist.toFixed(1), fontSize: 10, color: cs.onSurfaceVariant }),
             ctx.UI.Spacer({ width: 8 }),
-            ctx.UI.Text({ text: ts, fontSize: 10, color: '#999' })
+            ctx.UI.Text({ text: ts, fontSize: 10, color: cs.onSurfaceVariant })
           ])
         ]),
         ctx.UI.Spacer({ height: 4 }),
         ctx.UI.Text({
           text: content.length > 90 ? content.substring(0, 90) + '...' : content,
           fontSize: 13,
-          color: '#333',
+          color: cs.onSurface,
           maxLines: 2,
           overflow: 'ellipsis'
         }),
-        // 包含段
         displaySources.length > 0 ? ctx.UI.Column({
           modifier: ctx.Modifier.fillMaxWidth().padding({ top: 4 })
         }, [
-          ctx.UI.Text({ text: '包含段:', fontSize: 10, color: '#999' }),
+          ctx.UI.Text({ text: '包含段:', fontSize: 10, color: cs.onSurfaceVariant }),
           ctx.UI.Spacer({ height: 2 }),
           ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true }, displaySources.map(function(sid: string) {
             return ctx.UI.Surface({
-              containerColor: '#F5F5F5',
+              containerColor: cs.surfaceVariant,
               shape: { type: 'rounded', cornerRadius: 8 },
               modifier: ctx.Modifier.padding(2)
             }, [
               ctx.UI.Text({
-                text: '#' + sid, fontSize: 9, color: '#666',
+                text: '#' + sid, fontSize: 9, color: cs.onSurfaceVariant,
                 modifier: ctx.Modifier.padding({ horizontal: 6, vertical: 2 })
               })
             ]);
           })),
           sourceIdList.length > 3 ? ctx.UI.Text({
             text: '... 等 ' + sourceIdList.length + ' 个段',
-            fontSize: 9, color: '#999'
+            fontSize: 9, color: cs.onSurfaceVariant
           }) : ctx.UI.Spacer({ height: 0 })
         ]) : ctx.UI.Text({
           text: '包含 ' + sourceCount + ' 个来源',
-          fontSize: 10, color: '#999'
+          fontSize: 10, color: cs.onSurfaceVariant
         }),
         ctx.UI.Spacer({ height: 2 }),
         ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true }, [
           ctx.UI.Text({
             text: level === 'short' ? '段数: ' + sourceCount : '来源: ' + sourceCount,
-            fontSize: 10, color: '#999'
+            fontSize: 10, color: cs.onSurfaceVariant
           }),
-          ctx.UI.Icon({ name: 'chevron_right', size: 14, tint: '#999' })
+          ctx.UI.Icon({ name: 'chevron_right', size: 14, tint: cs.onSurfaceVariant })
         ])
       ])
     ]);
@@ -1068,7 +1210,7 @@ export default function DashboardScreen(ctx: any): any {
     if (blocks.length > 10) {
       items.push(ctx.UI.Text({
         text: '... 还有 ' + (blocks.length - 10) + ' 个',
-        fontSize: 12, color: '#999',
+        fontSize: 12, color: cs.onSurfaceVariant,
         modifier: ctx.Modifier.padding({ top: 4 })
       }));
     }
@@ -1083,23 +1225,22 @@ export default function DashboardScreen(ctx: any): any {
     var items: any[] = [];
     items.push(ctx.UI.Spacer({ height: 20 }));
     items.push(ctx.UI.Row({ horizontalArrangement: 'center', verticalAlignment: 'center', fillMaxWidth: true }, [
-      ctx.UI.Icon({ name: 'memory', size: 32, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'memory', size: 32, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Text({ text: 'OverMem 记忆库', fontSize: 26, fontWeight: 'bold', color: '#1A237E' })
+      ctx.UI.Text({ text: 'OverMem 记忆库', fontSize: 26, fontWeight: 'bold', color: cs.primary })
     ]));
     items.push(ctx.UI.Spacer({ height: 4 }));
-    items.push(ctx.UI.Text({ text: '智能对话记忆管理', fontSize: 15, color: '#666', modifier: ctx.Modifier.fillMaxWidth() }));
+    items.push(ctx.UI.Text({ text: '智能对话记忆管理', fontSize: 15, color: cs.onSurfaceVariant, modifier: ctx.Modifier.fillMaxWidth() }));
     items.push(ctx.UI.Spacer({ height: 24 }));
 
-    // 配置卡片
     var cardItems: any[] = [];
     cardItems.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'settings', size: 20, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'settings', size: 20, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({ text: '初始化配置', fontSize: 20, fontWeight: 'bold' })
     ]));
     cardItems.push(ctx.UI.Spacer({ height: 8 }));
-    cardItems.push(ctx.UI.Text({ text: '在开始记录记忆之前，请先完成 AI 供应商配置', fontSize: 13, color: '#666' }));
+    cardItems.push(ctx.UI.Text({ text: '在开始记录记忆之前，请先完成 AI 供应商配置', fontSize: 13, color: cs.onSurfaceVariant }));
     cardItems.push(ctx.UI.Spacer({ height: 16 }));
 
     cardItems.push(ctx.UI.Text({ text: 'Basic URL', fontSize: 14, fontWeight: 'bold' }));
@@ -1112,7 +1253,7 @@ export default function DashboardScreen(ctx: any): any {
       modifier: ctx.Modifier.fillMaxWidth()
     }));
     cardItems.push(ctx.UI.Spacer({ height: 4 }));
-    cardItems.push(ctx.UI.Text({ text: '只需填入基础地址，自动补全 /v1 后缀', fontSize: 11, color: '#999' }));
+    cardItems.push(ctx.UI.Text({ text: '只需填入基础地址，自动补全 /v1 后缀', fontSize: 11, color: cs.onSurfaceVariant }));
     cardItems.push(ctx.UI.Spacer({ height: 12 }));
 
     cardItems.push(ctx.UI.Text({ text: 'API Key', fontSize: 14, fontWeight: 'bold' }));
@@ -1151,20 +1292,25 @@ export default function DashboardScreen(ctx: any): any {
     cardItems.push(ctx.UI.Spacer({ height: 4 }));
     if (models.length > 0) {
       var modelChips = models.slice(0, 4).map(function(m: string) {
+        var isSel = model === m;
         return ctx.UI.Surface({
-          containerColor: model === m ? '#2196F3' : '#E0E0E0',
+          containerColor: isSel ? cs.primary : cs.surfaceVariant,
           shape: { type: 'rounded', cornerRadius: 16 },
           modifier: ctx.Modifier.padding(4),
           onClick: function() { setModel(m); }
         }, [
           ctx.UI.Text({
             text: m, fontSize: 11,
-            color: model === m ? '#FFFFFF' : '#333',
+            color: isSel ? cs.onPrimary : cs.onSurfaceVariant,
             modifier: ctx.Modifier.padding({ horizontal: 8, vertical: 4 })
           })
         ]);
       });
-      cardItems.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true }, modelChips));
+      cardItems.push(ctx.UI.LazyRow({
+        horizontalArrangement: 'start',
+        fillMaxWidth: true,
+        spacing: 4
+      }, modelChips));
     }
     cardItems.push(ctx.UI.Spacer({ height: 16 }));
     cardItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
@@ -1173,16 +1319,16 @@ export default function DashboardScreen(ctx: any): any {
         onClick: handleTestConnection,
         enabled: !isTesting,
         leadingIcon: ctx.UI.Icon({ name: 'wifi', size: 18 }),
-        containerColor: '#E3F2FD',
-        contentColor: '#0D47A1',
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       }),
       ctx.UI.Button({
         text: '初始化完毕',
         onClick: handleInitComplete,
         leadingIcon: ctx.UI.Icon({ name: 'check_circle', size: 18 }),
-        containerColor: '#4CAF50',
-        contentColor: '#FFFFFF',
+        containerColor: cs.primary,
+        contentColor: cs.onPrimary,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
     ]));
@@ -1191,20 +1337,20 @@ export default function DashboardScreen(ctx: any): any {
         ctx.UI.Icon({
           name: testResult.indexOf('成功') >= 0 ? 'check_circle' : 'error',
           size: 16,
-          tint: testResult.indexOf('成功') >= 0 ? '#4CAF50' : '#F44336'
+          tint: testResult.indexOf('成功') >= 0 ? cs.primary : cs.error
         }),
         ctx.UI.Spacer({ width: 4 }),
         ctx.UI.Text({
           text: testResult, fontSize: 13,
-          color: testResult.indexOf('成功') >= 0 ? '#4CAF50' : '#F44336'
+          color: testResult.indexOf('成功') >= 0 ? cs.primary : cs.error
         })
       ]));
     }
     if (configError) {
       cardItems.push(ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ top: 8 }) }, [
-        ctx.UI.Icon({ name: 'error', size: 16, tint: '#F44336' }),
+        ctx.UI.Icon({ name: 'error', size: 16, tint: cs.error }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: configError, fontSize: 13, color: '#F44336' })
+        ctx.UI.Text({ text: configError, fontSize: 13, color: cs.error })
       ]));
     }
 
@@ -1212,61 +1358,64 @@ export default function DashboardScreen(ctx: any): any {
       ctx.UI.Column({ padding: 20 }, cardItems)
     ]));
 
-    return ctx.UI.LazyColumn({
-      fillMaxSize: true,
-      padding: 20
-    }, items);
+    return ctx.UI.LazyColumn({ fillMaxSize: true, padding: 20 }, items);
   }
 
   // ============================================
-  // 主页（固定 Tab 栏 + 内部滚动内容）
+  // 主页
   // ============================================
 
   function renderHomePage() {
     return ctx.UI.Column({ fillMaxSize: true, padding: 16 }, [
-      // 标题
       ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'memory', size: 24, tint: '#1A237E' }),
+          ctx.UI.Icon({ name: 'memory', size: 24, tint: cs.primary }),
           ctx.UI.Spacer({ width: 8 }),
-          ctx.UI.Text({ text: 'OverMem 记忆库', fontSize: 22, fontWeight: 'bold', color: '#1A237E' })
+          ctx.UI.Text({ text: 'OverMem 记忆库', fontSize: 22, fontWeight: 'bold', color: cs.primary })
         ]),
         ctx.UI.IconButton({ icon: 'settings', onClick: function() { return onTabChange('settings'); } })
       ]),
-      ctx.UI.Text({ text: '智能对话记忆管理', fontSize: 13, color: '#666' }),
+      ctx.UI.Text({ text: '智能对话记忆管理', fontSize: 13, color: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ height: 12 }),
 
-      // Tab 栏
       ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true, modifier: ctx.Modifier.padding({ bottom: 8 }) }, [
         ctx.UI.Button({
           text: '欢迎',
           onClick: function() { return onTabChange('welcome'); },
           leadingIcon: ctx.UI.Icon({ name: 'home', size: 18 }),
-          containerColor: homeTab === 'welcome' ? '#1A237E' : '#E0E0E0',
-          contentColor: homeTab === 'welcome' ? '#FFFFFF' : '#333',
+          containerColor: homeTab === 'welcome' ? cs.primary : cs.surfaceVariant,
+          contentColor: homeTab === 'welcome' ? cs.onPrimary : cs.onSurfaceVariant,
           modifier: ctx.Modifier.weight(1).padding(4)
         }),
         ctx.UI.Button({
           text: '记忆管理',
           onClick: function() { return onTabChange('sessions'); },
           leadingIcon: ctx.UI.Icon({ name: 'book', size: 18 }),
-          containerColor: homeTab === 'sessions' ? '#1A237E' : '#E0E0E0',
-          contentColor: homeTab === 'sessions' ? '#FFFFFF' : '#333',
+          containerColor: homeTab === 'sessions' ? cs.primary : cs.surfaceVariant,
+          contentColor: homeTab === 'sessions' ? cs.onPrimary : cs.onSurfaceVariant,
+          modifier: ctx.Modifier.weight(1).padding(4)
+        }),
+        ctx.UI.Button({
+          text: '加载项',
+          onClick: function() { return onTabChange('addons'); },
+          leadingIcon: ctx.UI.Icon({ name: 'extension', size: 18 }),
+          containerColor: homeTab === 'addons' ? cs.primary : cs.surfaceVariant,
+          contentColor: homeTab === 'addons' ? cs.onPrimary : cs.onSurfaceVariant,
           modifier: ctx.Modifier.weight(1).padding(4)
         }),
         ctx.UI.Button({
           text: '设置',
           onClick: function() { return onTabChange('settings'); },
           leadingIcon: ctx.UI.Icon({ name: 'settings', size: 18 }),
-          containerColor: homeTab === 'settings' ? '#1A237E' : '#E0E0E0',
-          contentColor: homeTab === 'settings' ? '#FFFFFF' : '#333',
+          containerColor: homeTab === 'settings' ? cs.primary : cs.surfaceVariant,
+          contentColor: homeTab === 'settings' ? cs.onPrimary : cs.onSurfaceVariant,
           modifier: ctx.Modifier.weight(1).padding(4)
         })
       ]),
 
-      // Tab 内容
       homeTab === 'welcome' ? renderWelcomeTab() :
       homeTab === 'sessions' ? renderSessionsTab() :
+      homeTab === 'addons' ? renderAddonsTab() :
       renderSettingsTab(),
     ]);
   }
@@ -1278,23 +1427,21 @@ export default function DashboardScreen(ctx: any): any {
   function renderWelcomeTab() {
     var items: any[] = [];
 
-    // 问候语
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth() }, [
       ctx.UI.Column({ padding: 16 }, [
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: timeIcon, size: 22, tint: '#FF9800' }),
+          ctx.UI.Icon({ name: timeIcon, size: 22, tint: cs.primary }),
           ctx.UI.Spacer({ width: 8 }),
-          ctx.UI.Text({ text: timeGreeting + '，' + greeting, fontSize: 16, fontWeight: 'bold', color: '#1A237E' })
+          ctx.UI.Text({ text: timeGreeting + '，' + greeting, fontSize: 16, fontWeight: 'bold', color: cs.primary })
         ])
       ])
     ]));
     items.push(ctx.UI.Spacer({ height: 10 }));
 
-    // 状态卡片
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth() }, [
       ctx.UI.Column({ padding: 16 }, [
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'health_and_safety', size: 20, tint: isHealthy ? '#4CAF50' : '#F44336' }),
+          ctx.UI.Icon({ name: 'health_and_safety', size: 20, tint: isHealthy ? cs.primary : cs.error }),
           ctx.UI.Spacer({ width: 8 }),
           ctx.UI.Text({ text: '记忆库状态', fontSize: 15, fontWeight: 'bold' })
         ]),
@@ -1302,58 +1449,55 @@ export default function DashboardScreen(ctx: any): any {
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
           ctx.UI.Icon({
             name: isHealthy ? 'check_circle' : 'error',
-            size: 16, tint: isHealthy ? '#4CAF50' : '#F44336'
+            size: 16, tint: isHealthy ? cs.primary : cs.error
           }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: isHealthy ? '工作中' : '故障', fontSize: 13, color: isHealthy ? '#4CAF50' : '#F44336' })
+          ctx.UI.Text({ text: isHealthy ? '工作中' : '故障', fontSize: 13, color: isHealthy ? cs.primary : cs.error })
         ]),
-        lastError ? ctx.UI.Text({ text: '最近错误: ' + lastError, fontSize: 11, color: '#F44336', modifier: ctx.Modifier.padding({ top: 4 }) }) : ctx.UI.Spacer({ height: 0 })
+        lastError ? ctx.UI.Text({ text: '最近错误: ' + lastError, fontSize: 11, color: cs.error, modifier: ctx.Modifier.padding({ top: 4 }) }) : ctx.UI.Spacer({ height: 0 })
       ])
     ]));
     items.push(ctx.UI.Spacer({ height: 8 }));
 
-    // 统计卡片 2x2
-    items.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
-      renderStatCard('短期', formatCount(shortCount), '#4CAF50', 'bolt'),
-      renderStatCard('中期', formatCount(midCount), '#FF9800', 'book')
-    ]));
+    items.push(renderStatRow(
+      '短期', formatCount(shortCount), LEVEL_SHORT_COLOR, 'bolt',
+      '中期', formatCount(midCount), LEVEL_MID_COLOR, 'book'
+    ));
     items.push(ctx.UI.Spacer({ height: 6 }));
-    items.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
-      renderStatCard('长期', formatCount(longCount), '#9C27B0', 'archive'),
-      renderStatCard('活跃', formatCount(activeCount), '#F44336', 'star')
-    ]));
+    items.push(renderStatRow(
+      '长期', formatCount(longCount), LEVEL_LONG_COLOR, 'archive',
+      '活跃', formatCount(activeCount), STATE_ACTIVE_COLOR, 'star'
+    ));
     items.push(ctx.UI.Spacer({ height: 6 }));
-    items.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
-      renderStatCard('会话', formatCount(sessionCount), '#2196F3', 'chat'),
-      ctx.UI.Spacer({ modifier: ctx.Modifier.weight(1).padding(4) })
-    ]));
+    items.push(renderStatRow(
+      '会话', formatCount(sessionCount), cs.primary, 'chat',
+      '加载项', formatCount(addonCount), cs.secondary, 'extension'
+    ));
     items.push(ctx.UI.Spacer({ height: 10 }));
 
-    // 陪伴天数
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth() }, [
       ctx.UI.Column({ padding: 16, horizontalAlignment: 'start' }, [
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'celebration', size: 18, tint: '#9C27B0' }),
+          ctx.UI.Icon({ name: 'celebration', size: 18, tint: cs.primary }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: 'OverMem 已经陪伴了您', fontSize: 13, color: '#666' })
+          ctx.UI.Text({ text: 'OverMem 已经陪伴了您', fontSize: 13, color: cs.onSurfaceVariant })
         ]),
         ctx.UI.Spacer({ height: 4 }),
         ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-          ctx.UI.Text({ text: String(daysSinceInit), fontSize: 28, fontWeight: 'bold', color: '#9C27B0' }),
+          ctx.UI.Text({ text: String(daysSinceInit), fontSize: 28, fontWeight: 'bold', color: cs.primary }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: '天', fontSize: 16, color: '#666' })
+          ctx.UI.Text({ text: '天', fontSize: 16, color: cs.onSurfaceVariant })
         ])
       ])
     ]));
     items.push(ctx.UI.Spacer({ height: 12 }));
 
-    // 刷新按钮
     items.push(ctx.UI.Button({
       text: loading ? '刷新中...' : '刷新',
       onClick: function() { return refreshData(); },
       leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 18 }),
-      containerColor: '#E3F2FD',
-      contentColor: '#0D47A1',
+      containerColor: cs.secondaryContainer,
+      contentColor: cs.onSecondaryContainer,
       modifier: ctx.Modifier.fillMaxWidth().padding(4)
     }));
 
@@ -1371,16 +1515,16 @@ export default function DashboardScreen(ctx: any): any {
           text: '总览',
           onClick: function() { return onSessionsSubTabChange('overview'); },
           leadingIcon: ctx.UI.Icon({ name: 'list', size: 16 }),
-          containerColor: sessionsSubTab === 'overview' ? '#1A237E' : '#E0E0E0',
-          contentColor: sessionsSubTab === 'overview' ? '#FFFFFF' : '#333',
+          containerColor: sessionsSubTab === 'overview' ? cs.primary : cs.surfaceVariant,
+          contentColor: sessionsSubTab === 'overview' ? cs.onPrimary : cs.onSurfaceVariant,
           modifier: ctx.Modifier.weight(1).padding(4)
         }),
         ctx.UI.Button({
           text: '会话',
           onClick: function() { return onSessionsSubTabChange('sessions'); },
           leadingIcon: ctx.UI.Icon({ name: 'chat', size: 16 }),
-          containerColor: sessionsSubTab === 'sessions' ? '#1A237E' : '#E0E0E0',
-          contentColor: sessionsSubTab === 'sessions' ? '#FFFFFF' : '#333',
+          containerColor: sessionsSubTab === 'sessions' ? cs.primary : cs.surfaceVariant,
+          contentColor: sessionsSubTab === 'sessions' ? cs.onPrimary : cs.onSurfaceVariant,
           modifier: ctx.Modifier.weight(1).padding(4)
         })
       ]),
@@ -1394,54 +1538,36 @@ export default function DashboardScreen(ctx: any): any {
     }
     var items: any[] = [];
 
-    // 层级筛选
     var hasData = shortBlocks.length > 0 || midBlocks.length > 0 || longBlocks.length > 0;
-    items.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true, modifier: ctx.Modifier.padding({ vertical: 4 }) }, [
-      ctx.UI.Surface({
-        containerColor: selectedLevel === null ? '#1A237E' : '#E0E0E0',
+
+    function chip(label: string, selected: boolean, color: string, onClick: () => void) {
+      return ctx.UI.Surface({
+        containerColor: selected ? color : cs.surfaceVariant,
         shape: { type: 'rounded', cornerRadius: 16 },
         modifier: ctx.Modifier.padding(4),
-        onClick: function() { setSelectedLevel(null); forceRerender(); }
+        onClick: onClick
       }, [ctx.UI.Text({
-        text: '全部 (' + (shortCount + midCount + longCount) + ')',
+        text: label,
         fontSize: 11,
-        color: selectedLevel === null ? '#FFFFFF' : '#333',
+        color: selected ? '#FFFFFF' : cs.onSurfaceVariant,
         modifier: ctx.Modifier.padding({ horizontal: 8, vertical: 4 })
-      })]),
-      ctx.UI.Surface({
-        containerColor: selectedLevel === 'short' ? '#4CAF50' : '#E0E0E0',
-        shape: { type: 'rounded', cornerRadius: 16 },
-        modifier: ctx.Modifier.padding(4),
-        onClick: function() { setSelectedLevel('short'); forceRerender(); }
-      }, [ctx.UI.Text({
-        text: '短期 (' + shortCount + ')', fontSize: 11,
-        color: selectedLevel === 'short' ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.padding({ horizontal: 8, vertical: 4 })
-      })]),
-      ctx.UI.Surface({
-        containerColor: selectedLevel === 'mid' ? '#FF9800' : '#E0E0E0',
-        shape: { type: 'rounded', cornerRadius: 16 },
-        modifier: ctx.Modifier.padding(4),
-        onClick: function() { setSelectedLevel('mid'); forceRerender(); }
-      }, [ctx.UI.Text({
-        text: '中期 (' + midCount + ')', fontSize: 11,
-        color: selectedLevel === 'mid' ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.padding({ horizontal: 8, vertical: 4 })
-      })]),
-      ctx.UI.Surface({
-        containerColor: selectedLevel === 'long' ? '#9C27B0' : '#E0E0E0',
-        shape: { type: 'rounded', cornerRadius: 16 },
-        modifier: ctx.Modifier.padding(4),
-        onClick: function() { setSelectedLevel('long'); forceRerender(); }
-      }, [ctx.UI.Text({
-        text: '长期 (' + longCount + ')', fontSize: 11,
-        color: selectedLevel === 'long' ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.padding({ horizontal: 8, vertical: 4 })
-      })])
+      })]);
+    }
+
+    items.push(ctx.UI.LazyRow({
+      horizontalArrangement: 'start',
+      fillMaxWidth: true,
+      spacing: 4,
+      modifier: ctx.Modifier.padding({ vertical: 4 })
+    }, [
+      chip('全部 (' + (shortCount + midCount + longCount) + ')', selectedLevel === null, cs.primary, function() { setSelectedLevel(null); forceRerender(); }),
+      chip('短期 (' + shortCount + ')', selectedLevel === 'short', LEVEL_SHORT_COLOR, function() { setSelectedLevel('short'); forceRerender(); }),
+      chip('中期 (' + midCount + ')', selectedLevel === 'mid', LEVEL_MID_COLOR, function() { setSelectedLevel('mid'); forceRerender(); }),
+      chip('长期 (' + longCount + ')', selectedLevel === 'long', LEVEL_LONG_COLOR, function() { setSelectedLevel('long'); forceRerender(); })
     ]));
+
     items.push(ctx.UI.Spacer({ height: 4 }));
 
-    // 内容
     if (loading) {
       items.push(ctx.UI.Box({ fillMaxWidth: true, height: 160, contentAlignment: 'center' }, [
         ctx.UI.CircularProgressIndicator()
@@ -1449,9 +1575,9 @@ export default function DashboardScreen(ctx: any): any {
     } else if (!hasData) {
       items.push(ctx.UI.Box({ fillMaxWidth: true, height: 160, contentAlignment: 'center' }, [
         ctx.UI.Column({ horizontalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'inbox', size: 48, tint: '#999' }),
+          ctx.UI.Icon({ name: 'inbox', size: 48, tint: cs.onSurfaceVariant }),
           ctx.UI.Spacer({ height: 8 }),
-          ctx.UI.Text({ text: '暂无记忆块', fontSize: 13, color: '#999' })
+          ctx.UI.Text({ text: '暂无记忆块', fontSize: 13, color: cs.onSurfaceVariant })
         ])
       ]));
     } else {
@@ -1468,7 +1594,7 @@ export default function DashboardScreen(ctx: any): any {
     var items: any[] = [];
     items.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'chat', size: 18, tint: '#1A237E' }),
+        ctx.UI.Icon({ name: 'chat', size: 18, tint: cs.primary }),
         ctx.UI.Spacer({ width: 8 }),
         ctx.UI.Text({ text: '会话列表', fontSize: 16, fontWeight: 'bold' })
       ]),
@@ -1476,21 +1602,21 @@ export default function DashboardScreen(ctx: any): any {
         text: '刷新',
         onClick: function() { return refreshData(); },
         leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 14 }),
-        containerColor: '#E3F2FD',
-        contentColor: '#0D47A1',
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
         modifier: ctx.Modifier.padding(4)
       })
     ]));
     items.push(ctx.UI.Spacer({ height: 4 }));
-    items.push(ctx.UI.Text({ text: '共 ' + currentSessions.length + ' 个会话', fontSize: 13, color: '#666' }));
+    items.push(ctx.UI.Text({ text: '共 ' + currentSessions.length + ' 个会话', fontSize: 13, color: cs.onSurfaceVariant }));
     items.push(ctx.UI.Spacer({ height: 8 }));
 
     if (currentSessions.length === 0) {
       items.push(ctx.UI.Box({ fillMaxWidth: true, height: 160, contentAlignment: 'center' }, [
         ctx.UI.Column({ horizontalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'chat_bubble_outline', size: 48, tint: '#999' }),
+          ctx.UI.Icon({ name: 'chat_bubble_outline', size: 48, tint: cs.onSurfaceVariant }),
           ctx.UI.Spacer({ height: 8 }),
-          ctx.UI.Text({ text: '暂无会话记录', fontSize: 13, color: '#999' })
+          ctx.UI.Text({ text: '暂无会话记录', fontSize: 13, color: cs.onSurfaceVariant })
         ])
       ]));
     } else {
@@ -1509,13 +1635,13 @@ export default function DashboardScreen(ctx: any): any {
                 ctx.UI.Text({ text: s.title || '未命名会话', fontSize: 15, fontWeight: 'bold' }),
                 ctx.UI.Spacer({ height: 2 }),
                 ctx.UI.Row({ verticalAlignment: 'center' }, [
-                  ctx.UI.Icon({ name: 'person', size: 12, tint: '#666' }),
+                  ctx.UI.Icon({ name: 'person', size: 12, tint: cs.onSurfaceVariant }),
                   ctx.UI.Spacer({ width: 4 }),
-                  ctx.UI.Text({ text: '角色卡: ' + (s.roleCardName || '未绑定'), fontSize: 11, color: '#666' })
+                  ctx.UI.Text({ text: '角色卡: ' + (s.roleCardName || '未绑定'), fontSize: 11, color: cs.onSurfaceVariant })
                 ]),
-                ctx.UI.Text({ text: '最后活动: ' + new Date(s.lastMessageAt).toLocaleString(), fontSize: 11, color: '#999' })
+                ctx.UI.Text({ text: '最后活动: ' + new Date(s.lastMessageAt).toLocaleString(), fontSize: 11, color: cs.onSurfaceVariant })
               ]),
-              ctx.UI.Icon({ name: 'chevron_right', size: 22, tint: '#999' })
+              ctx.UI.Icon({ name: 'chevron_right', size: 22, tint: cs.onSurfaceVariant })
             ])
           ]);
         })(session));
@@ -1538,14 +1664,14 @@ export default function DashboardScreen(ctx: any): any {
     aiItems.push(ctx.UI.Text({ text: 'AI 配置', fontSize: 15, fontWeight: 'bold' }));
     aiItems.push(ctx.UI.Spacer({ height: 8 }));
     aiItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'link', size: 16, tint: '#666' }),
+      ctx.UI.Icon({ name: 'link', size: 16, tint: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ width: 4 }),
-      ctx.UI.Text({ text: 'Basic URL: ' + (aiSettings?.basicUrl || '未配置'), fontSize: 13, color: '#666' })
+      ctx.UI.Text({ text: 'Basic URL: ' + (aiSettings?.basicUrl || '未配置'), fontSize: 13, color: cs.onSurfaceVariant })
     ]));
     aiItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'smart_toy', size: 16, tint: '#666' }),
+      ctx.UI.Icon({ name: 'smart_toy', size: 16, tint: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ width: 4 }),
-      ctx.UI.Text({ text: '模型: ' + (aiSettings?.model || '未选择'), fontSize: 13, color: '#666' })
+      ctx.UI.Text({ text: '模型: ' + (aiSettings?.model || '未选择'), fontSize: 13, color: cs.onSurfaceVariant })
     ]));
     aiItems.push(ctx.UI.Spacer({ height: 8 }));
     aiItems.push(ctx.UI.Button({
@@ -1556,8 +1682,8 @@ export default function DashboardScreen(ctx: any): any {
         showBanner('已重置 AI 配置', 'info');
       },
       leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 16 }),
-      containerColor: '#FFEBEE',
-      contentColor: '#C62828',
+      containerColor: cs.errorContainer,
+      contentColor: cs.onErrorContainer,
       modifier: ctx.Modifier.fillMaxWidth().padding(4)
     }));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
@@ -1623,40 +1749,42 @@ export default function DashboardScreen(ctx: any): any {
 
     injectItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'star', size: 16, tint: '#F44336' }),
+        ctx.UI.Icon({ name: 'star', size: 16, tint: cs.primary }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '活跃记忆占比', fontSize: 13, color: '#333' })
+        ctx.UI.Text({ text: '活跃记忆占比', fontSize: 13, color: cs.onSurface })
       ]),
-      ctx.UI.Text({ text: Math.round(activeRatio * 100) + '%', fontSize: 13, fontWeight: 'bold', color: '#F44336' })
+      ctx.UI.Text({ text: Math.round(activeRatio * 100) + '%', fontSize: 13, fontWeight: 'bold', color: cs.primary })
     ]));
     injectItems.push(ctx.UI.Spacer({ height: 4 }));
-    injectItems.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true }, [
+    injectItems.push(ctx.UI.LazyRow({
+      horizontalArrangement: 'start',
+      fillMaxWidth: true,
+      spacing: 6
+    }, [
       ctx.UI.Button({
         text: '50%', onClick: function() { setActiveRatio(0.5); },
-        containerColor: activeRatio === 0.5 ? '#F44336' : '#E0E0E0',
-        contentColor: activeRatio === 0.5 ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.weight(1).padding(2)
+        containerColor: activeRatio === 0.5 ? cs.primary : cs.surfaceVariant,
+        contentColor: activeRatio === 0.5 ? cs.onPrimary : cs.onSurfaceVariant
       }),
       ctx.UI.Button({
         text: '70%', onClick: function() { setActiveRatio(0.7); },
-        containerColor: activeRatio === 0.7 ? '#F44336' : '#E0E0E0',
-        contentColor: activeRatio === 0.7 ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.weight(1).padding(2)
+        containerColor: activeRatio === 0.7 ? cs.primary : cs.surfaceVariant,
+        contentColor: activeRatio === 0.7 ? cs.onPrimary : cs.onSurfaceVariant
       }),
       ctx.UI.Button({
         text: '100%', onClick: function() { setActiveRatio(1.0); },
-        containerColor: activeRatio === 1.0 ? '#F44336' : '#E0E0E0',
-        contentColor: activeRatio === 1.0 ? '#FFFFFF' : '#333',
-        modifier: ctx.Modifier.weight(1).padding(2)
+        containerColor: activeRatio === 1.0 ? cs.primary : cs.surfaceVariant,
+        contentColor: activeRatio === 1.0 ? cs.onPrimary : cs.onSurfaceVariant
       })
     ]));
+
     injectItems.push(ctx.UI.Spacer({ height: 8 }));
 
     injectItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'psychology', size: 16, tint: '#666' }),
+        ctx.UI.Icon({ name: 'psychology', size: 16, tint: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '启用回想概率', fontSize: 13, color: '#333' })
+        ctx.UI.Text({ text: '启用回想概率', fontSize: 13, color: cs.onSurface })
       ]),
       ctx.UI.Switch({
         checked: recallEnabled,
@@ -1664,7 +1792,7 @@ export default function DashboardScreen(ctx: any): any {
       })
     ]));
     injectItems.push(ctx.UI.Text({
-      text: '记忆零碎化处理（挖空 / 混淆）', fontSize: 11, color: '#999'
+      text: '记忆零碎化处理（挖空 / 混淆）', fontSize: 11, color: cs.onSurfaceVariant
     }));
 
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
@@ -1675,24 +1803,28 @@ export default function DashboardScreen(ctx: any): any {
     var ptItems: any[] = [];
     ptItems.push(ctx.UI.Text({ text: '透传设置', fontSize: 15, fontWeight: 'bold' }));
     ptItems.push(ctx.UI.Spacer({ height: 4 }));
-    ptItems.push(ctx.UI.Text({ text: '选择记忆共享范围：', fontSize: 11, color: '#666' }));
+    ptItems.push(ctx.UI.Text({ text: '选择记忆共享范围：', fontSize: 11, color: cs.onSurfaceVariant }));
     ptItems.push(ctx.UI.Spacer({ height: 4 }));
-    ptItems.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true }, [
-      ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ end: 12 }) }, [
+    ptItems.push(ctx.UI.LazyRow({
+      horizontalArrangement: 'start',
+      fillMaxWidth: true,
+      spacing: 12
+    }, [
+      ctx.UI.Row({ verticalAlignment: 'center' }, [
         ctx.UI.RadioButton({
           selected: passthroughMode === 'none',
           onClick: function() { setPassthroughMode('none'); }
         }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '独立会话', fontSize: 12, color: '#333' })
+        ctx.UI.Text({ text: '独立会话', fontSize: 12, color: cs.onSurface })
       ]),
-      ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ end: 12 }) }, [
+      ctx.UI.Row({ verticalAlignment: 'center' }, [
         ctx.UI.RadioButton({
           selected: passthroughMode === 'role_card',
           onClick: function() { setPassthroughMode('role_card'); }
         }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '同角色卡', fontSize: 12, color: '#333' })
+        ctx.UI.Text({ text: '同角色卡', fontSize: 12, color: cs.onSurface })
       ]),
       ctx.UI.Row({ verticalAlignment: 'center' }, [
         ctx.UI.RadioButton({
@@ -1700,14 +1832,14 @@ export default function DashboardScreen(ctx: any): any {
           onClick: function() { setPassthroughMode('global'); }
         }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '全局共享', fontSize: 12, color: '#333' })
+        ctx.UI.Text({ text: '全局共享', fontSize: 12, color: cs.onSurface })
       ])
     ]));
     ptItems.push(ctx.UI.Text({
       text: passthroughMode === 'none' ? '每个会话独立存储记忆' :
             passthroughMode === 'role_card' ? '同一角色卡的所有会话共享记忆' :
             '所有会话共享同一个记忆库',
-      fontSize: 11, color: '#999', modifier: ctx.Modifier.padding({ top: 2 })
+      fontSize: 11, color: cs.onSurfaceVariant, modifier: ctx.Modifier.padding({ top: 2 })
     }));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, ptItems)
@@ -1717,73 +1849,70 @@ export default function DashboardScreen(ctx: any): any {
     var persItems: any[] = [];
     persItems.push(ctx.UI.Text({ text: '人格设定', fontSize: 15, fontWeight: 'bold' }));
     persItems.push(ctx.UI.Spacer({ height: 4 }));
-    persItems.push(ctx.UI.Text({ text: 'AI 将以选定的人格视角整理记忆', fontSize: 11, color: '#666' }));
+    persItems.push(ctx.UI.Text({ text: 'AI 将以选定的人格视角整理记忆', fontSize: 11, color: cs.onSurfaceVariant }));
     persItems.push(ctx.UI.Spacer({ height: 8 }));
 
-    // 两模式切换
     persItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
       ctx.UI.Button({
         text: '自动匹配',
         onClick: function() { setPersonalityMode('auto'); },
         leadingIcon: ctx.UI.Icon({ name: 'auto_awesome', size: 16 }),
-        containerColor: personalityMode === 'auto' ? '#1A237E' : '#E0E0E0',
-        contentColor: personalityMode === 'auto' ? '#FFFFFF' : '#333',
+        containerColor: personalityMode === 'auto' ? cs.primary : cs.surfaceVariant,
+        contentColor: personalityMode === 'auto' ? cs.onPrimary : cs.onSurfaceVariant,
         modifier: ctx.Modifier.weight(1).padding(4)
       }),
       ctx.UI.Button({
         text: '手动选择',
         onClick: function() { setPersonalityMode('manual'); },
         leadingIcon: ctx.UI.Icon({ name: 'touch_app', size: 16 }),
-        containerColor: personalityMode === 'manual' ? '#1A237E' : '#E0E0E0',
-        contentColor: personalityMode === 'manual' ? '#FFFFFF' : '#333',
+        containerColor: personalityMode === 'manual' ? cs.primary : cs.surfaceVariant,
+        contentColor: personalityMode === 'manual' ? cs.onPrimary : cs.onSurfaceVariant,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
     ]));
     persItems.push(ctx.UI.Spacer({ height: 8 }));
 
     if (personalityMode === 'auto') {
-      // 自动匹配：说明 + 显示会话绑定情况
       persItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'info', size: 14, tint: '#666' }),
+        ctx.UI.Icon({ name: 'info', size: 14, tint: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '将自动使用每个会话绑定的角色卡', fontSize: 12, color: '#666' })
+        ctx.UI.Text({ text: '将自动使用每个会话绑定的角色卡', fontSize: 12, color: cs.onSurfaceVariant })
       ]));
       persItems.push(ctx.UI.Spacer({ height: 4 }));
       persItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'chat', size: 14, tint: '#999' }),
+        ctx.UI.Icon({ name: 'chat', size: 14, tint: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '共 ' + sessions.length + ' 个会话，', fontSize: 11, color: '#999' })
+        ctx.UI.Text({ text: '共 ' + sessions.length + ' 个会话，', fontSize: 11, color: cs.onSurfaceVariant })
       ]));
       persItems.push(ctx.UI.Text({
         text: '每个会话分别使用其绑定的角色卡作为人格',
-        fontSize: 11, color: '#999'
+        fontSize: 11, color: cs.onSurfaceVariant
       }));
     } else {
-      // 手动选择：显示获取按钮（被动加载）
       if (isLoadingCards) {
         persItems.push(ctx.UI.Row({ horizontalArrangement: 'center', fillMaxWidth: true, modifier: ctx.Modifier.padding({ vertical: 16 }) }, [
           ctx.UI.CircularProgressIndicator({ size: 20 }),
           ctx.UI.Spacer({ width: 8 }),
-          ctx.UI.Text({ text: '加载角色卡中...', fontSize: 13, color: '#666' })
+          ctx.UI.Text({ text: '加载角色卡中...', fontSize: 13, color: cs.onSurfaceVariant })
         ]));
       } else if (availableCards.length === 0) {
-        persItems.push(ctx.UI.Text({ text: '尚未获取角色卡列表', fontSize: 12, color: '#999', modifier: ctx.Modifier.padding({ top: 4 }) }));
+        persItems.push(ctx.UI.Text({ text: '尚未获取角色卡列表', fontSize: 12, color: cs.onSurfaceVariant, modifier: ctx.Modifier.padding({ top: 4 }) }));
         persItems.push(ctx.UI.Spacer({ height: 6 }));
         persItems.push(ctx.UI.Button({
           text: '获取角色卡列表',
           onClick: function() { return loadCharacterCards(); },
           leadingIcon: ctx.UI.Icon({ name: 'cloud_download', size: 18 }),
-          containerColor: '#E3F2FD',
-          contentColor: '#0D47A1',
+          containerColor: cs.secondaryContainer,
+          contentColor: cs.onSecondaryContainer,
           modifier: ctx.Modifier.fillMaxWidth().padding(4)
         }));
       } else {
-        persItems.push(ctx.UI.Text({ text: '选择角色卡（共 ' + availableCards.length + ' 个）', fontSize: 13, color: '#666' }));
+        persItems.push(ctx.UI.Text({ text: '选择角色卡（共 ' + availableCards.length + ' 个）', fontSize: 13, color: cs.onSurfaceVariant }));
         persItems.push(ctx.UI.Spacer({ height: 4 }));
         var cardChips = availableCards.slice(0, 12).map(function(card: any) {
           var isSel = personalityCardId === card.id;
           return ctx.UI.Surface({
-            containerColor: isSel ? '#1A237E' : '#F5F5F5',
+            containerColor: isSel ? cs.primary : cs.surfaceVariant,
             shape: { type: 'rounded', cornerRadius: 16 },
             modifier: ctx.Modifier.padding(4).clickable(function() {
               setPersonalityCardId(card.id);
@@ -1793,14 +1922,18 @@ export default function DashboardScreen(ctx: any): any {
           }, [
             ctx.UI.Text({
               text: card.name, fontSize: 11,
-              color: isSel ? '#FFFFFF' : '#333',
+              color: isSel ? cs.onPrimary : cs.onSurfaceVariant,
               modifier: ctx.Modifier.padding({ horizontal: 10, vertical: 4 })
             })
           ]);
         });
-        persItems.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true }, cardChips));
+        persItems.push(ctx.UI.LazyRow({
+          horizontalArrangement: 'start',
+          fillMaxWidth: true,
+          spacing: 4
+        }, cardChips));
         if (availableCards.length > 12) {
-          persItems.push(ctx.UI.Text({ text: '... 还有 ' + (availableCards.length - 12) + ' 个', fontSize: 11, color: '#999' }));
+          persItems.push(ctx.UI.Text({ text: '... 还有 ' + (availableCards.length - 12) + ' 个', fontSize: 11, color: cs.onSurfaceVariant }));
         }
         persItems.push(ctx.UI.Spacer({ height: 6 }));
         persItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
@@ -1808,16 +1941,16 @@ export default function DashboardScreen(ctx: any): any {
             text: '重新获取',
             onClick: function() { return loadCharacterCards(); },
             leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 16 }),
-            containerColor: '#E3F2FD',
-            contentColor: '#0D47A1',
+            containerColor: cs.secondaryContainer,
+            contentColor: cs.onSecondaryContainer,
             modifier: ctx.Modifier.weight(1).padding(4)
           }),
           ctx.UI.Button({
             text: '清空列表',
             onClick: function() { setAvailableCards([]); setPersonalityCardId(''); },
             leadingIcon: ctx.UI.Icon({ name: 'clear_all', size: 16 }),
-            containerColor: '#FFEBEE',
-            contentColor: '#C62828',
+            containerColor: cs.errorContainer,
+            contentColor: cs.onErrorContainer,
             modifier: ctx.Modifier.weight(1).padding(4)
           })
         ]));
@@ -1831,16 +1964,16 @@ export default function DashboardScreen(ctx: any): any {
     // ============ 调试模式 ============
     var dbgItems: any[] = [];
     dbgItems.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'bug_report', size: 18, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'bug_report', size: 18, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({ text: '调试模式', fontSize: 15, fontWeight: 'bold' })
     ]));
     dbgItems.push(ctx.UI.Spacer({ height: 6 }));
     dbgItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'description', size: 16, tint: '#666' }),
+        ctx.UI.Icon({ name: 'description', size: 16, tint: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '记录对话原文到日志', fontSize: 13, color: '#333' })
+        ctx.UI.Text({ text: '记录对话原文到日志', fontSize: 13, color: cs.onSurface })
       ]),
       ctx.UI.Switch({
         checked: debugMode,
@@ -1852,74 +1985,80 @@ export default function DashboardScreen(ctx: any): any {
         ? '已开启：每条消息原文、缓存区状态、计数器状态都会写入日志'
         : '关闭中：仅记录摘要，不打印原文',
       fontSize: 11,
-      color: debugMode ? '#F44336' : '#999',
+      color: debugMode ? cs.error : cs.onSurfaceVariant,
       modifier: ctx.Modifier.padding({ top: 2 })
     }));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, dbgItems)
     ]));
 
-    // ============ 操作按钮 ============
+    // ============ 操作 ============
+    // 配色规则：主操作 → primary / 次操作 → secondaryContainer / 危险 → errorContainer
     var actionItems: any[] = [];
     actionItems.push(ctx.UI.Text({ text: '操作', fontSize: 15, fontWeight: 'bold' }));
     actionItems.push(ctx.UI.Spacer({ height: 8 }));
 
+    // 主操作
     actionItems.push(ctx.UI.Button({
       text: '保存记忆配置',
       onClick: function() { saveMemoryConfig(); },
-      leadingIcon: ctx.UI.Icon({ name: 'save', size: 18 }),    
-      containerColor: '#4CAF50',
-      contentColor: '#FFFFFF',
+      leadingIcon: ctx.UI.Icon({ name: 'save', size: 18 }),
+      containerColor: cs.primary,
+      contentColor: cs.onPrimary,
       modifier: ctx.Modifier.fillMaxWidth().padding(4)
     }));
 
     actionItems.push(ctx.UI.Spacer({ height: 4 }));
 
+    // 次操作
     actionItems.push(ctx.UI.Button({
       text: '暂存区同步',
       onClick: function() { return syncPendingArea(); },
-      leadingIcon: ctx.UI.Icon({ name: 'sync', size: 18 }),    
-      containerColor: '#FF9800',
-      contentColor: '#FFFFFF',
+      leadingIcon: ctx.UI.Icon({ name: 'sync', size: 18 }),
+      containerColor: cs.secondaryContainer,
+      contentColor: cs.onSecondaryContainer,
       modifier: ctx.Modifier.fillMaxWidth().padding(4)
     }));
 
     actionItems.push(ctx.UI.Text({
       text: '将缓存区中的对话合并到短期记忆块',
-      fontSize: 11, color: '#999',
+      fontSize: 11, color: cs.onSurfaceVariant,
       modifier: ctx.Modifier.padding({ top: 2 })
     }));
 
+    actionItems.push(ctx.UI.Spacer({ height: 6 }));
+
+    // 次操作
     actionItems.push(ctx.UI.Button({
-    text: '刷新暂存区状态',
-    onClick: function() {
-      try {
-        var stm = new ShortTermMemory();
-        var pendingInfo = stm.getPendingInfo();
-        if (pendingInfo.length === 0) {
-          setPendingInfoText('空');
-        } else {
-          setPendingInfoText(pendingInfo.map(function(p: any) {
-            var sidShort = p.sessionId ? p.sessionId.substring(0, 8) : '??';
-            return sidShort + '/' + p.role + '(' + p.length + ')';
-          }).join(', '));
+      text: '刷新暂存区状态',
+      onClick: function() {
+        try {
+          var stm = new ShortTermMemory();
+          var pendingInfo = stm.getPendingInfo();
+          if (pendingInfo.length === 0) {
+            setPendingInfoText('空');
+          } else {
+            setPendingInfoText(pendingInfo.map(function(p: any) {
+              var sidShort = p.sessionId ? p.sessionId.substring(0, 8) : '??';
+              return sidShort + '/' + p.role + '(' + p.length + ')';
+            }).join(', '));
+          }
+          showBanner('已刷新暂存区状态', 'info');
+        } catch (e: any) {
+          setPendingInfoText('未知');
+          showBanner('刷新失败: ' + e.message, 'error');
         }
-        showBanner('已刷新暂存区状态', 'info');
-      } catch (e: any) {
-        setPendingInfoText('未知');
-        showBanner('刷新失败: ' + e.message, 'error');
-      }
-      return Promise.resolve();
-    },
-    leadingIcon: ctx.UI.Icon({ name: 'sync', size: 16 }),
-    containerColor: '#E3F2FD',
-    contentColor: '#0D47A1',
-    modifier: ctx.Modifier.fillMaxWidth().padding(4)
-  }));
+        return Promise.resolve();
+      },
+      leadingIcon: ctx.UI.Icon({ name: 'sync', size: 16 }),
+      containerColor: cs.secondaryContainer,
+      contentColor: cs.onSecondaryContainer,
+      modifier: ctx.Modifier.fillMaxWidth().padding(4)
+    }));
 
     actionItems.push(ctx.UI.Text({
       text: '暂存区状态：' + pendingInfoText,
-      fontSize: 11, color: '#666',
+      fontSize: 11, color: cs.onSurfaceVariant,
       modifier: ctx.Modifier.padding({ top: 4 })
     }));
 
@@ -1930,15 +2069,15 @@ export default function DashboardScreen(ctx: any): any {
     // ============ 日志管理 ============
     var logItems: any[] = [];
     logItems.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'description', size: 18, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'description', size: 18, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({ text: '日志管理', fontSize: 15, fontWeight: 'bold' })
     ]));
     logItems.push(ctx.UI.Spacer({ height: 8 }));
     logItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'storage', size: 16, tint: '#666' }),
+      ctx.UI.Icon({ name: 'storage', size: 16, tint: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ width: 4 }),
-      ctx.UI.Text({ text: '日志大小: ' + logSizeText, fontSize: 13, color: '#666' })
+      ctx.UI.Text({ text: '日志大小: ' + logSizeText, fontSize: 13, color: cs.onSurfaceVariant })
     ]));
     logItems.push(ctx.UI.Spacer({ height: 8 }));
     logItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
@@ -1946,14 +2085,16 @@ export default function DashboardScreen(ctx: any): any {
         text: '刷新大小',
         onClick: function() { updateLogSize(); showBanner('已刷新', 'info'); },
         leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 14 }),
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       }),
       ctx.UI.Button({
         text: '删除日志',
         onClick: function() { handleDeleteLog(); },
         leadingIcon: ctx.UI.Icon({ name: 'delete_forever', size: 14 }),
-        containerColor: '#FFEBEE',
-        contentColor: '#C62828',
+        containerColor: cs.errorContainer,
+        contentColor: cs.onErrorContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
     ]));
@@ -1965,17 +2106,132 @@ export default function DashboardScreen(ctx: any): any {
     items.push(ctx.UI.Card({ elevation: 1, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, [
         ctx.UI.Row({ verticalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'folder', size: 16, tint: '#666' }),
+          ctx.UI.Icon({ name: 'folder', size: 16, tint: cs.onSurfaceVariant }),
           ctx.UI.Spacer({ width: 4 }),
-          ctx.UI.Text({ text: '数据目录', fontSize: 13, color: '#666' })
+          ctx.UI.Text({ text: '数据目录', fontSize: 13, color: cs.onSurfaceVariant })
         ]),
         ctx.UI.Text({
           text: '/storage/emulated/0/Download/Operit/overmem/',
-          fontSize: 11, color: '#999',
+          fontSize: 11, color: cs.onSurfaceVariant,
           modifier: ctx.Modifier.padding({ top: 4 })
         })
       ])
     ]));
+
+    // ============ 独立客户端 ============
+    var clientItems: any[] = [];
+
+    clientItems.push(ctx.UI.Row({
+      horizontalArrangement: 'start',
+      verticalAlignment: 'center'
+    }, [
+      ctx.UI.Icon({ name: 'smartphone', size: 18, tint: cs.primary }),
+      ctx.UI.Spacer({ width: 8 }),
+      ctx.UI.Text({ text: '独立客户端', fontSize: 15, fontWeight: 'bold' })
+    ]));
+    clientItems.push(ctx.UI.Spacer({ height: 6 }));
+    clientItems.push(ctx.UI.Text({
+      text: '完整版管理面板，脱离 Operit 独立运行，功能更全面。',
+      fontSize: 12,
+      color: cs.onSurfaceVariant
+    }));
+    clientItems.push(ctx.UI.Spacer({ height: 10 }));
+
+    if (clientInstalled) {
+      clientItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
+        ctx.UI.Icon({ name: 'check_circle', size: 14, tint: cs.primary }),
+        ctx.UI.Spacer({ width: 6 }),
+        ctx.UI.Text({
+          text: '已安装 v' + clientVersionName + '（' + clientVersionCode + '）',
+          fontSize: 12,
+          color: cs.primary
+        })
+      ]));
+      if (clientHasUpdate()) {
+        clientItems.push(ctx.UI.Spacer({ height: 4 }));
+        clientItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'new_releases', size: 14, tint: cs.error }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({
+            text: '插件内置版本：v' + CLIENT_VERSION_NAME + '（' + CLIENT_VERSION_CODE + '）',
+            fontSize: 12,
+            color: cs.error
+          })
+        ]));
+      }
+    } else {
+      clientItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
+        ctx.UI.Icon({ name: 'info', size: 14, tint: cs.onSurfaceVariant }),
+        ctx.UI.Spacer({ width: 6 }),
+        ctx.UI.Text({
+          text: '尚未安装',
+          fontSize: 12,
+          color: cs.onSurfaceVariant
+        })
+      ]));
+    }
+
+    clientItems.push(ctx.UI.Spacer({ height: 10 }));
+
+    var clientBtnLabel = clientInstalling
+      ? '安装中…'
+      : (clientInstalled
+          ? (clientHasUpdate() ? '更新客户端' : '重新安装')
+          : '安装完整客户端');
+
+    clientItems.push(ctx.UI.Row({
+      horizontalArrangement: 'spaceEvenly',
+      fillMaxWidth: true
+    }, [
+      ctx.UI.Button({
+        text: clientBtnLabel,
+        onClick: installClient,
+        enabled: !clientInstalling,
+        leadingIcon: ctx.UI.Icon({ name: 'download', size: 16 }),
+        containerColor: cs.primary,
+        contentColor: cs.onPrimary,
+        modifier: ctx.Modifier.weight(1).padding(4)
+      }),
+      ctx.UI.Button({
+        text: '刷新状态',
+        onClick: refreshClientStatus,
+        enabled: !clientInstalling,
+        leadingIcon: ctx.UI.Icon({ name: 'refresh', size: 16 }),
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
+        modifier: ctx.Modifier.weight(1).padding(4)
+      })
+    ]));
+
+    if (clientStatus) {
+      clientItems.push(ctx.UI.Spacer({ height: 8 }));
+      clientItems.push(ctx.UI.Text({
+        text: clientStatus,
+        fontSize: 11,
+        color: cs.onSurfaceVariant
+      }));
+    }
+
+    items.push(ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 })
+    }, [
+      ctx.UI.Column({ padding: 14 }, clientItems)
+    ]));
+
+    // ============ 加载项入口 ============
+    items.push(ctx.UI.Spacer({ height: 8 }));
+    items.push(ctx.UI.Button({
+      text: '加载项',
+      onClick: function() {
+        pushPage('addons');
+        return Promise.resolve();
+      },
+      leadingIcon: ctx.UI.Icon({ name: 'extension', size: 18 }),
+      containerColor: cs.secondaryContainer,
+      contentColor: cs.onSecondaryContainer,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ top: 4 })
+    }));
 
     // ============ 关于本软件入口 ============
     items.push(ctx.UI.Spacer({ height: 8 }));
@@ -1986,8 +2242,8 @@ export default function DashboardScreen(ctx: any): any {
         return Promise.resolve();
       },
       leadingIcon: ctx.UI.Icon({ name: 'info', size: 18 }),
-      containerColor: '#E3F2FD',
-      contentColor: '#0D47A1',
+      containerColor: cs.secondaryContainer,
+      contentColor: cs.onSecondaryContainer,
       modifier: ctx.Modifier.fillMaxWidth().padding({ top: 4, bottom: 16 })
     }));
 
@@ -2010,7 +2266,6 @@ export default function DashboardScreen(ctx: any): any {
       return ctx.UI.LazyColumn({ fillMaxSize: true, padding: 16 }, items);
     }
 
-    // 头部返回
     items.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.IconButton({ icon: 'arrow_back', onClick: popPage }),
       ctx.UI.Spacer({ width: 8 }),
@@ -2018,7 +2273,6 @@ export default function DashboardScreen(ctx: any): any {
     ]));
     items.push(ctx.UI.Spacer({ height: 8 }));
 
-    // 读取块
     var sessShort: ShortBlock[] = [];
     var sessMid: MidBlock[] = [];
     var sessLong: LongBlock[] = [];
@@ -2031,7 +2285,7 @@ export default function DashboardScreen(ctx: any): any {
       sessMid = bm.getMidBlocks(scope.type, scope.id);
       sessLong = bm.getLongBlocks(scope.type, scope.id);
     } catch (e: any) {
-      items.push(ctx.UI.Text({ text: '加载失败: ' + e.message, fontSize: 13, color: '#F44336' }));
+      items.push(ctx.UI.Text({ text: '加载失败: ' + e.message, fontSize: 13, color: cs.error }));
     }
 
     var isMidLoading = (consolidatingSessionId === sessionId && consolidatingLevel === 'mid');
@@ -2050,8 +2304,8 @@ export default function DashboardScreen(ctx: any): any {
           ? ctx.UI.CircularProgressIndicator({ size: 16 })
           : ctx.UI.Icon({ name: 'arrow_upward', size: 16 }),
         enabled: !anyLoading,
-        containerColor: '#FF9800',
-        contentColor: '#FFFFFF',
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       }),
       ctx.UI.Button({
@@ -2061,8 +2315,8 @@ export default function DashboardScreen(ctx: any): any {
           ? ctx.UI.CircularProgressIndicator({ size: 16 })
           : ctx.UI.Icon({ name: 'arrow_upward', size: 16 }),
         enabled: !anyLoading,
-        containerColor: '#9C27B0',
-        contentColor: '#FFFFFF',
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
     ]));
@@ -2071,9 +2325,9 @@ export default function DashboardScreen(ctx: any): any {
     if (sessShort.length === 0 && sessMid.length === 0 && sessLong.length === 0) {
       items.push(ctx.UI.Box({ fillMaxWidth: true, height: 160, contentAlignment: 'center' }, [
         ctx.UI.Column({ horizontalAlignment: 'center' }, [
-          ctx.UI.Icon({ name: 'inbox', size: 48, tint: '#999' }),
+          ctx.UI.Icon({ name: 'inbox', size: 48, tint: cs.onSurfaceVariant }),
           ctx.UI.Spacer({ height: 8 }),
-          ctx.UI.Text({ text: '该会话暂无记忆块', fontSize: 13, color: '#999' })
+          ctx.UI.Text({ text: '该会话暂无记忆块', fontSize: 13, color: cs.onSurfaceVariant })
         ])
       ]));
     } else {
@@ -2112,29 +2366,28 @@ export default function DashboardScreen(ctx: any): any {
     ]));
     items.push(ctx.UI.Spacer({ height: 12 }));
 
-    // 元信息卡片
     var metaItems: any[] = [];
     metaItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'schedule', size: 14, tint: '#999' }),
+        ctx.UI.Icon({ name: 'schedule', size: 14, tint: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '时间: ' + (block.timestamp || '未知'), fontSize: 13, color: '#666' })
+        ctx.UI.Text({ text: '时间: ' + (block.timestamp || '未知'), fontSize: 13, color: cs.onSurfaceVariant })
       ]),
-      ctx.UI.Text({ text: '距离: ' + (block.distance || 0).toFixed(1), fontSize: 13, color: '#666' })
+      ctx.UI.Text({ text: '距离: ' + (block.distance || 0).toFixed(1), fontSize: 13, color: cs.onSurfaceVariant })
     ]));
     metaItems.push(ctx.UI.Spacer({ height: 4 }));
     metaItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'fingerprint', size: 14, tint: '#999' }),
+      ctx.UI.Icon({ name: 'fingerprint', size: 14, tint: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ width: 4 }),
-      ctx.UI.Text({ text: 'ID: ' + (block.id || '未知'), fontSize: 11, color: '#999' })
+      ctx.UI.Text({ text: 'ID: ' + (block.id || '未知'), fontSize: 11, color: cs.onSurfaceVariant })
     ]));
     metaItems.push(ctx.UI.Spacer({ height: 4 }));
     metaItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'layers', size: 14, tint: '#999' }),
+      ctx.UI.Icon({ name: 'layers', size: 14, tint: cs.onSurfaceVariant }),
       ctx.UI.Spacer({ width: 4 }),
       ctx.UI.Text({
         text: '包含: ' + (block.segmentCount || block.sourceCount || 0) + ' 个' + (level === 'short' ? ' 段' : ' 来源'),
-        fontSize: 11, color: '#999'
+        fontSize: 11, color: cs.onSurfaceVariant
       })
     ]));
     if (state === 'active') {
@@ -2152,18 +2405,17 @@ export default function DashboardScreen(ctx: any): any {
         ctx.UI.Text({ text: '状态: 已废弃', fontSize: 12, color: getStateColor(state) })
       ]));
     }
-    metaItems.push(ctx.UI.Divider({ color: '#EEEEEE', thickness: 1 }));
+    metaItems.push(ctx.UI.Divider({ color: cs.outlineVariant, thickness: 1 }));
     metaItems.push(ctx.UI.Spacer({ height: 8 }));
-    metaItems.push(ctx.UI.Text({ text: block.content || '（空内容）', fontSize: 15, color: '#333' }));
+    metaItems.push(ctx.UI.Text({ text: block.content || '（空内容）', fontSize: 15, color: cs.onSurface }));
 
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, metaItems)
     ]));
 
-    // 段原文（短期块）
     if (level === 'short' && block.sourceIds) {
       items.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center', modifier: ctx.Modifier.padding({ top: 8, bottom: 4 }) }, [
-        ctx.UI.Icon({ name: 'description', size: 18, tint: '#4CAF50' }),
+        ctx.UI.Icon({ name: 'description', size: 18, tint: LEVEL_SHORT_COLOR }),
         ctx.UI.Spacer({ width: 6 }),
         ctx.UI.Text({ text: '包含的段（原文）', fontSize: 15, fontWeight: 'bold' })
       ]));
@@ -2173,12 +2425,12 @@ export default function DashboardScreen(ctx: any): any {
         var ids = block.sourceIds.split(',').filter(function(s: string) { return s; }).map(function(s: string) { return parseInt(s); });
         var segs = bm2.getSegmentsByIds(ids);
         if (segs.length === 0) {
-          items.push(ctx.UI.Text({ text: '暂无段数据', fontSize: 12, color: '#999' }));
+          items.push(ctx.UI.Text({ text: '暂无段数据', fontSize: 12, color: cs.onSurfaceVariant }));
         } else {
           for (var si = 0; si < segs.length; si++) {
             var seg = segs[si];
             var roleLabel = seg.role === 'user' ? '用户' : 'AI';
-            var roleColor = seg.role === 'user' ? '#2196F3' : '#FF9800';
+            var roleColor = seg.role === 'user' ? cs.primary : LEVEL_MID_COLOR;
             var roleIcon = seg.role === 'user' ? 'person' : 'smart_toy';
             items.push(ctx.UI.Card({ elevation: 1, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 4 }) }, [
               ctx.UI.Column({ padding: 10 }, [
@@ -2188,40 +2440,41 @@ export default function DashboardScreen(ctx: any): any {
                     ctx.UI.Spacer({ width: 4 }),
                     ctx.UI.Text({ text: roleLabel, fontSize: 12, fontWeight: 'bold', color: roleColor })
                   ]),
-                  ctx.UI.Text({ text: new Date(seg.timestamp).toLocaleString(), fontSize: 10, color: '#999' })
+                  ctx.UI.Text({ text: new Date(seg.timestamp).toLocaleString(), fontSize: 10, color: cs.onSurfaceVariant })
                 ]),
                 ctx.UI.Spacer({ height: 4 }),
-                ctx.UI.Text({ text: seg.content, fontSize: 13, color: '#333' })
+                ctx.UI.Text({ text: seg.content, fontSize: 13, color: cs.onSurface })
               ])
             ]));
           }
         }
       } catch (e: any) {
-        items.push(ctx.UI.Text({ text: '加载段失败: ' + e.message, fontSize: 12, color: '#F44336' }));
+        items.push(ctx.UI.Text({ text: '加载段失败: ' + e.message, fontSize: 12, color: cs.error }));
       }
     }
 
-    // 中/长期来源
     if (level !== 'short') {
       items.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center', modifier: ctx.Modifier.padding({ top: 8, bottom: 4 }) }, [
-        ctx.UI.Icon({ name: 'link', size: 18, tint: '#FF9800' }),
+        ctx.UI.Icon({ name: 'link', size: 18, tint: LEVEL_MID_COLOR }),
         ctx.UI.Spacer({ width: 6 }),
         ctx.UI.Text({ text: '来源块 ID', fontSize: 15, fontWeight: 'bold' })
       ]));
       items.push(ctx.UI.Text({
         text: (block.sourceBlockIds || block.sourceMidIds || '无'),
-        fontSize: 12, color: '#666'
+        fontSize: 12, color: cs.onSurfaceVariant
       }));
     }
 
     items.push(ctx.UI.Spacer({ height: 16 }));
     items.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
-    ctx.UI.Button({
-      text: '编辑',
-      onClick: function() { pushPage('edit', data); return Promise.resolve(); },
-      leadingIcon: ctx.UI.Icon({ name: 'edit', size: 18 }),
-      modifier: ctx.Modifier.weight(1).padding(4)
-    }),
+      ctx.UI.Button({
+        text: '编辑',
+        onClick: function() { pushPage('edit', data); return Promise.resolve(); },
+        leadingIcon: ctx.UI.Icon({ name: 'edit', size: 18 }),
+        containerColor: cs.secondaryContainer,
+        contentColor: cs.onSecondaryContainer,
+        modifier: ctx.Modifier.weight(1).padding(4)
+      }),
       ctx.UI.Button({
         text: '删除',
         onClick: function() {
@@ -2239,7 +2492,6 @@ export default function DashboardScreen(ctx: any): any {
                 bm.deleteBlock(deletedLevel, deletedId);
                 logInfo("UI", "已删除 " + deletedLevel + " 块 id=" + deletedId);
                 showBanner('已删除', 'success');
-                // 从确认页弹 2 层：跨过 detail 回到它的上一页
                 popPage(2);
                 await refreshData();
               } catch (e: any) {
@@ -2251,11 +2503,11 @@ export default function DashboardScreen(ctx: any): any {
           return Promise.resolve();
         },
         leadingIcon: ctx.UI.Icon({ name: 'delete', size: 18 }),
-        containerColor: '#FFEBEE',
-        contentColor: '#C62828',
+        containerColor: cs.errorContainer,
+        contentColor: cs.onErrorContainer,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
-  ]));
+    ]));
 
     return ctx.UI.LazyColumn({ fillMaxSize: true, padding: 16 }, items);
   }
@@ -2287,7 +2539,6 @@ export default function DashboardScreen(ctx: any): any {
     var editItems: any[] = [];
 
     if (level === 'short') {
-      // 短期：拆分 user / assistant 两个输入框
       var userId = '';
       var assistantId = '';
       var initialUser = '';
@@ -2319,9 +2570,9 @@ export default function DashboardScreen(ctx: any): any {
       var [editAssistant, setEditAssistant] = ctx.useState('editAssistant_' + block.id, initialAssistant);
 
       editItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'person', size: 16, tint: '#2196F3' }),
+        ctx.UI.Icon({ name: 'person', size: 16, tint: cs.primary }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: '用户消息', fontSize: 13, color: '#2196F3', fontWeight: 'bold' })
+        ctx.UI.Text({ text: '用户消息', fontSize: 13, color: cs.primary, fontWeight: 'bold' })
       ]));
       editItems.push(ctx.UI.Spacer({ height: 4 }));
       editItems.push(ctx.UI.TextField({
@@ -2335,9 +2586,9 @@ export default function DashboardScreen(ctx: any): any {
       editItems.push(ctx.UI.Spacer({ height: 12 }));
 
       editItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'smart_toy', size: 16, tint: '#FF9800' }),
+        ctx.UI.Icon({ name: 'smart_toy', size: 16, tint: LEVEL_MID_COLOR }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: 'AI 回复', fontSize: 13, color: '#FF9800', fontWeight: 'bold' })
+        ctx.UI.Text({ text: 'AI 回复', fontSize: 13, color: LEVEL_MID_COLOR, fontWeight: 'bold' })
       ]));
       editItems.push(ctx.UI.Spacer({ height: 4 }));
       editItems.push(ctx.UI.TextField({
@@ -2355,10 +2606,8 @@ export default function DashboardScreen(ctx: any): any {
           try {
             var db2 = DatabaseManager.getInstance(DB_PATH);
             var bm2 = new BlockManager(db2);
-            // 更新段
             if (userId) bm2.updateSegmentContent(parseInt(userId), editUser);
             if (assistantId) bm2.updateSegmentContent(parseInt(assistantId), editAssistant);
-            // 重新拼接块内容
             var newBlockContent = '用户: ' + editUser + '\nAI: ' + editAssistant;
             bm2.updateBlockContent('short', block.id, newBlockContent);
             showBanner('已保存', 'success');
@@ -2371,16 +2620,15 @@ export default function DashboardScreen(ctx: any): any {
           }
         },
         leadingIcon: ctx.UI.Icon({ name: 'save', size: 18 }),
-        containerColor: '#4CAF50',
-        contentColor: '#FFFFFF',
+        containerColor: cs.primary,
+        contentColor: cs.onPrimary,
         modifier: ctx.Modifier.fillMaxWidth()
       }));
 
     } else {
-      // 中/长期（及废弃篓）：单个输入框
       var [editContent, setEditContent] = ctx.useState('editContent_' + block.id, block.content || '');
 
-      editItems.push(ctx.UI.Text({ text: '内容', fontSize: 13, color: '#666' }));
+      editItems.push(ctx.UI.Text({ text: '内容', fontSize: 13, color: cs.onSurfaceVariant }));
       editItems.push(ctx.UI.Spacer({ height: 4 }));
       editItems.push(ctx.UI.TextField({
         value: editContent,
@@ -2407,8 +2655,8 @@ export default function DashboardScreen(ctx: any): any {
           }
         },
         leadingIcon: ctx.UI.Icon({ name: 'save', size: 18 }),
-        containerColor: '#4CAF50',
-        contentColor: '#FFFFFF',
+        containerColor: cs.primary,
+        contentColor: cs.onPrimary,
         modifier: ctx.Modifier.fillMaxWidth()
       }));
     }
@@ -2431,13 +2679,13 @@ export default function DashboardScreen(ctx: any): any {
     items.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.IconButton({ icon: 'arrow_back', onClick: function() { popPage(); return Promise.resolve(); } }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Icon({ name: 'warning', size: 20, tint: '#F44336' }),
+      ctx.UI.Icon({ name: 'warning', size: 20, tint: cs.error }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({
         text: data.title || '确认操作',
         fontSize: 18,
         fontWeight: 'bold',
-        color: '#F44336',
+        color: cs.error,
         modifier: ctx.Modifier.weight(1)
       })
     ]));
@@ -2445,7 +2693,7 @@ export default function DashboardScreen(ctx: any): any {
 
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 16 }) }, [
       ctx.UI.Column({ padding: 16 }, [
-        ctx.UI.Text({ text: data.message, fontSize: 15, color: '#333' })
+        ctx.UI.Text({ text: data.message, fontSize: 15, color: cs.onSurface })
       ])
     ]));
 
@@ -2457,8 +2705,8 @@ export default function DashboardScreen(ctx: any): any {
           return Promise.resolve();
         },
         leadingIcon: ctx.UI.Icon({ name: 'close', size: 18 }),
-        containerColor: '#E0E0E0',
-        contentColor: '#333',
+        containerColor: cs.surfaceVariant,
+        contentColor: cs.onSurfaceVariant,
         modifier: ctx.Modifier.weight(1).padding(4)
       }),
       ctx.UI.Button({
@@ -2472,8 +2720,8 @@ export default function DashboardScreen(ctx: any): any {
           }
         },
         leadingIcon: ctx.UI.Icon({ name: 'check', size: 18 }),
-        containerColor: '#F44336',
-        contentColor: '#FFFFFF',
+        containerColor: cs.error,
+        contentColor: cs.onError,
         modifier: ctx.Modifier.weight(1).padding(4)
       })
     ]));
@@ -2488,27 +2736,24 @@ export default function DashboardScreen(ctx: any): any {
   function renderAboutPage() {
     var items: any[] = [];
 
-    // 顶部
     items.push(ctx.UI.Row({ horizontalArrangement: 'start', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.IconButton({ icon: 'arrow_back', onClick: function() { popPage(); return Promise.resolve(); } }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Icon({ name: 'info', size: 20, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'info', size: 20, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Text({ text: '关于OverMem', fontSize: 18, fontWeight: 'bold', modifier: ctx.Modifier.weight(1) })
+      ctx.UI.Text({ text: '关于 OverMem', fontSize: 18, fontWeight: 'bold', modifier: ctx.Modifier.weight(1) })
     ]));
     items.push(ctx.UI.Spacer({ height: 12 }));
 
-    // 卡片 1.1 —— 版本号
     var typeColor = getVersionTypeColor(CURRENT_VERSION_TYPE);
     var versionItems: any[] = [];
     versionItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      ctx.UI.Icon({ name: 'memory', size: 20, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'memory', size: 20, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({ text: 'OverMem', fontSize: 16, fontWeight: 'bold' })
     ]));
     versionItems.push(ctx.UI.Spacer({ height: 8 }));
     versionItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-      // 类型框
       ctx.UI.Surface({
         containerColor: typeColor,
         shape: { type: 'rounded', cornerRadius: 4 },
@@ -2527,18 +2772,17 @@ export default function DashboardScreen(ctx: any): any {
         text: CURRENT_VERSION.Main + '.' + CURRENT_VERSION.Major + '.' + CURRENT_VERSION.Minor,
         fontSize: 15,
         fontWeight: 'bold',
-        color: '#333'
+        color: cs.onSurface
       })
     ]));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, versionItems)
     ]));
 
-    // 卡片 1.2 —— 检查更新
     var updateItems: any[] = [];
     updateItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'system_update', size: 18, tint: '#1A237E' }),
+        ctx.UI.Icon({ name: 'system_update', size: 18, tint: cs.primary }),
         ctx.UI.Spacer({ width: 8 }),
         ctx.UI.Text({ text: '检查更新', fontSize: 15, fontWeight: 'bold' })
       ]),
@@ -2551,41 +2795,39 @@ export default function DashboardScreen(ctx: any): any {
 
     if (updateChecking) {
       updateItems.push(ctx.UI.Spacer({ height: 8 }));
-      updateItems.push(ctx.UI.Text({ text: '正在检查更新...', fontSize: 12, color: '#666' }));
+      updateItems.push(ctx.UI.Text({ text: '正在检查更新...', fontSize: 12, color: cs.onSurfaceVariant }));
     } else if (updateError) {
       updateItems.push(ctx.UI.Spacer({ height: 8 }));
       updateItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'error', size: 14, tint: '#F44336' }),
+        ctx.UI.Icon({ name: 'error', size: 14, tint: cs.error }),
         ctx.UI.Spacer({ width: 4 }),
-        ctx.UI.Text({ text: updateError, fontSize: 12, color: '#F44336' })
+        ctx.UI.Text({ text: updateError, fontSize: 12, color: cs.error })
       ]));
     } else if (updateResult) {
       updateItems.push(ctx.UI.Spacer({ height: 8 }));
 
-      // —— 稳定版 ——
       var latest = updateResult.latest;
       if (latest) {
         if (latest.hasUpdate) {
           updateItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-            ctx.UI.Icon({ name: 'new_releases', size: 14, tint: '#4CAF50' }),
+            ctx.UI.Icon({ name: 'new_releases', size: 14, tint: cs.primary }),
             ctx.UI.Spacer({ width: 4 }),
             ctx.UI.Text({
               text: '发现新版本（稳定）: ' + latest.displayVersion,
-              fontSize: 13, color: '#4CAF50', fontWeight: 'bold'
+              fontSize: 13, color: cs.primary, fontWeight: 'bold'
             })
           ]));
         } else {
           updateItems.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
-            ctx.UI.Icon({ name: 'check_circle', size: 14, tint: '#666' }),
+            ctx.UI.Icon({ name: 'check_circle', size: 14, tint: cs.onSurfaceVariant }),
             ctx.UI.Spacer({ width: 4 }),
-            ctx.UI.Text({ text: '已是最新稳定版', fontSize: 13, color: '#666' })
+            ctx.UI.Text({ text: '已是最新稳定版', fontSize: 13, color: cs.onSurfaceVariant })
           ]));
         }
       } else {
-        updateItems.push(ctx.UI.Text({ text: '稳定版信息不可用', fontSize: 12, color: '#999' }));
+        updateItems.push(ctx.UI.Text({ text: '稳定版信息不可用', fontSize: 12, color: cs.onSurfaceVariant }));
       }
 
-      // —— 预览版（只有启用预览计划才展示） ——
       if (previewEnabled) {
         updateItems.push(ctx.UI.Spacer({ height: 8 }));
         var pre = updateResult.pre;
@@ -2607,50 +2849,48 @@ export default function DashboardScreen(ctx: any): any {
             ctx.UI.Text({
               text: pre.hasUpdate ? '预览版有更新: ' + pre.displayVersion : '预览版已是最新: ' + pre.displayVersion,
               fontSize: 13,
-              color: pre.hasUpdate ? '#F44336' : '#666',
+              color: pre.hasUpdate ? cs.error : cs.onSurfaceVariant,
               fontWeight: pre.hasUpdate ? 'bold' : 'normal'
             })
           ]));
 
-          // newfeatures
           if (pre.newfeatures) {
             updateItems.push(ctx.UI.Spacer({ height: 6 }));
             updateItems.push(ctx.UI.Surface({
-              containerColor: '#F5F5F5',
+              containerColor: cs.surfaceVariant,
               shape: { type: 'rounded', cornerRadius: 6 },
               modifier: ctx.Modifier.fillMaxWidth()
             }, [
               ctx.UI.Column({ padding: 10 }, [
-                ctx.UI.Text({ text: '新特性', fontSize: 12, color: '#666', fontWeight: 'bold' }),
+                ctx.UI.Text({ text: '新特性', fontSize: 12, color: cs.onSurfaceVariant, fontWeight: 'bold' }),
                 ctx.UI.Spacer({ height: 4 }),
-                ctx.UI.Text({ text: pre.newfeatures, fontSize: 13, color: '#333' })
+                ctx.UI.Text({ text: pre.newfeatures, fontSize: 13, color: cs.onSurface })
               ])
             ]));
           }
           if (pre.commit && pre.commit !== 'NULLNow') {
             updateItems.push(ctx.UI.Spacer({ height: 4 }));
-            updateItems.push(ctx.UI.Text({ text: 'commit: ' + pre.commit, fontSize: 11, color: '#999' }));
+            updateItems.push(ctx.UI.Text({ text: 'commit: ' + pre.commit, fontSize: 11, color: cs.onSurfaceVariant }));
           }
         } else if (pre && !pre.available) {
-          updateItems.push(ctx.UI.Text({ text: '预览版暂不可用', fontSize: 12, color: '#999' }));
+          updateItems.push(ctx.UI.Text({ text: '预览版暂不可用', fontSize: 12, color: cs.onSurfaceVariant }));
         } else {
-          updateItems.push(ctx.UI.Text({ text: '预览版信息不可用', fontSize: 12, color: '#999' }));
+          updateItems.push(ctx.UI.Text({ text: '预览版信息不可用', fontSize: 12, color: cs.onSurfaceVariant }));
         }
       }
     } else {
       updateItems.push(ctx.UI.Spacer({ height: 8 }));
-      updateItems.push(ctx.UI.Text({ text: '点击右侧按钮检查更新', fontSize: 12, color: '#999' }));
+      updateItems.push(ctx.UI.Text({ text: '点击右侧按钮检查更新', fontSize: 12, color: cs.onSurfaceVariant }));
     }
 
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, updateItems)
     ]));
 
-    // 卡片 1.3 —— 加入预览计划
     var previewItems: any[] = [];
     previewItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'science', size: 18, tint: '#1A237E' }),
+        ctx.UI.Icon({ name: 'science', size: 18, tint: cs.primary }),
         ctx.UI.Spacer({ width: 8 }),
         ctx.UI.Text({ text: '加入预览计划', fontSize: 15, fontWeight: 'bold' })
       ]),
@@ -2674,17 +2914,16 @@ export default function DashboardScreen(ctx: any): any {
     previewItems.push(ctx.UI.Spacer({ height: 4 }));
     previewItems.push(ctx.UI.Text({
       text: previewEnabled ? '已启用：检查更新时会展示预览版信息' : '未启用：仅显示稳定版更新状态',
-      fontSize: 11, color: previewEnabled ? '#F44336' : '#999'
+      fontSize: 11, color: previewEnabled ? cs.error : cs.onSurfaceVariant
     }));
     items.push(ctx.UI.Card({ elevation: 2, modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }) }, [
       ctx.UI.Column({ padding: 14 }, previewItems)
     ]));
 
-    // 卡片 1.4 —— 开源仓库
     var repoItems: any[] = [];
     repoItems.push(ctx.UI.Row({ horizontalArrangement: 'spaceBetween', fillMaxWidth: true, verticalAlignment: 'center' }, [
       ctx.UI.Row({ verticalAlignment: 'center' }, [
-        ctx.UI.Icon({ name: 'code', size: 18, tint: '#1A237E' }),
+        ctx.UI.Icon({ name: 'code', size: 18, tint: cs.primary }),
         ctx.UI.Spacer({ width: 8 }),
         ctx.UI.Text({ text: '开源仓库', fontSize: 15, fontWeight: 'bold' })
       ]),
@@ -2700,7 +2939,6 @@ export default function DashboardScreen(ctx: any): any {
       ctx.UI.Column({ padding: 14 }, repoItems)
     ]));
 
-    // 卡片 1.5 —— 开源项目使用说明（点击进入）
     items.push(ctx.UI.Card({
       elevation: 2,
       modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 }).clickable(function() {
@@ -2714,15 +2952,15 @@ export default function DashboardScreen(ctx: any): any {
         verticalAlignment: 'center'
       }, [
         ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.weight(1) }, [
-          ctx.UI.Icon({ name: 'gavel', size: 18, tint: '#1A237E' }),
+          ctx.UI.Icon({ name: 'gavel', size: 18, tint: cs.primary }),
           ctx.UI.Spacer({ width: 8 }),
           ctx.UI.Column({}, [
             ctx.UI.Text({ text: '开源项目使用说明', fontSize: 15, fontWeight: 'bold' }),
             ctx.UI.Spacer({ height: 2 }),
-            ctx.UI.Text({ text: 'GPL-3.0 · LGPL-3.0 · Apache-2.0 · MIT', fontSize: 11, color: '#999' })
+            ctx.UI.Text({ text: 'GPL-3.0 · LGPL-3.0 · Apache-2.0 · MIT', fontSize: 11, color: cs.onSurfaceVariant })
           ])
         ]),
-        ctx.UI.Icon({ name: 'chevron_right', size: 20, tint: '#999' })
+        ctx.UI.Icon({ name: 'chevron_right', size: 20, tint: cs.onSurfaceVariant })
       ])
     ]));
 
@@ -2748,7 +2986,7 @@ export default function DashboardScreen(ctx: any): any {
             text: lib.name,
             fontSize: 14,
             fontWeight: 'bold',
-            color: '#333',
+            color: cs.onSurface,
             modifier: ctx.Modifier.weight(1)
           }),
           ctx.UI.Surface({
@@ -2765,9 +3003,9 @@ export default function DashboardScreen(ctx: any): any {
           ])
         ]),
         ctx.UI.Spacer({ height: 4 }),
-        ctx.UI.Text({ text: lib.author, fontSize: 11, color: '#666' }),
+        ctx.UI.Text({ text: lib.author, fontSize: 11, color: cs.onSurfaceVariant }),
         ctx.UI.Spacer({ height: 4 }),
-        ctx.UI.Text({ text: lib.usage, fontSize: 12, color: '#333' }),
+        ctx.UI.Text({ text: lib.usage, fontSize: 12, color: cs.onSurface }),
         lib.url ? (function (u: string) {
           return ctx.UI.Row({
             verticalAlignment: 'center',
@@ -2775,9 +3013,9 @@ export default function DashboardScreen(ctx: any): any {
               return openBrowser(u);
             })
           }, [
-            ctx.UI.Icon({ name: 'open_in_new', size: 14, tint: '#2196F3' }),
+            ctx.UI.Icon({ name: 'open_in_new', size: 14, tint: cs.primary }),
             ctx.UI.Spacer({ width: 4 }),
-            ctx.UI.Text({ text: '访问项目主页', fontSize: 11, color: '#2196F3' })
+            ctx.UI.Text({ text: '访问项目主页', fontSize: 11, color: cs.primary })
           ]);
         })(lib.url) : ctx.UI.Spacer({ height: 0 })
       ])
@@ -2800,7 +3038,6 @@ export default function DashboardScreen(ctx: any): any {
   function renderOpenSourcePage() {
     var items: any[] = [];
 
-    // 头部
     items.push(ctx.UI.Row({
       horizontalArrangement: 'start',
       fillMaxWidth: true,
@@ -2808,7 +3045,7 @@ export default function DashboardScreen(ctx: any): any {
     }, [
       ctx.UI.IconButton({ icon: 'arrow_back', onClick: function() { popPage(); return Promise.resolve(); } }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Icon({ name: 'code', size: 20, tint: '#1A237E' }),
+      ctx.UI.Icon({ name: 'code', size: 20, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
       ctx.UI.Text({ text: '开源项目使用说明', fontSize: 18, fontWeight: 'bold', modifier: ctx.Modifier.weight(1) })
     ]));
@@ -2816,21 +3053,19 @@ export default function DashboardScreen(ctx: any): any {
     items.push(ctx.UI.Text({
       text: '本页面披露 OverMem 在实现过程中使用或依赖的开源项目。',
       fontSize: 12,
-      color: '#666'
+      color: cs.onSurfaceVariant
     }));
 
-    // —— 1. OverMem 自身 ——
-    items.push(renderSectionHeader('memory', '本项目', '#1A237E'));
+    items.push(renderSectionHeader('memory', '本项目', cs.primary));
     items.push(renderLibCard({
       name: 'OverMem 记忆库',
       author: 'Copyright (C) 2026 yyswys-yjyj',
       license: 'GPL-3.0',
-      licenseColor: '#0b9ff0',
+      licenseColor: '#0B9FF0',
       usage: '本项目自身，为 Operit AI 提供智能对话记忆管理能力。',
       url: REPO_URL
     }));
 
-    // —— 2. 宿主平台 ——
     items.push(renderSectionHeader('smart_toy', '宿主平台', '#FF6640'));
     items.push(renderLibCard({
       name: 'Operit AI',
@@ -2841,8 +3076,7 @@ export default function DashboardScreen(ctx: any): any {
       url: 'https://github.com/AAswordman/Operit'
     }));
 
-    // —— 3. 直接依赖 ——
-    items.push(renderSectionHeader('link', '直接依赖', '#1A237E'));
+    items.push(renderSectionHeader('link', '直接依赖', cs.primary));
 
     items.push(renderLibCard({
       name: 'OkHttp',
@@ -2871,12 +3105,11 @@ export default function DashboardScreen(ctx: any): any {
       url: 'https://github.com/microsoft/TypeScript'
     }));
 
-    // —— 4. 经平台间接使用 ——
-    items.push(renderSectionHeader('extension', '经平台间接使用', '#666'));
+    items.push(renderSectionHeader('extension', '经平台间接使用', cs.onSurfaceVariant));
     items.push(ctx.UI.Text({
       text: '以下组件由 Operit 平台内部使用，OverMem 通过其接口间接受益，此处仅作透明披露。',
       fontSize: 11,
-      color: '#999',
+      color: cs.onSurfaceVariant,
       modifier: ctx.Modifier.padding({ bottom: 6 })
     }));
 
@@ -2898,8 +3131,7 @@ export default function DashboardScreen(ctx: any): any {
       url: 'https://quickjs.org/'
     }));
 
-    // —— 5. 完整许可证文本 ——
-    items.push(renderSectionHeader('description', '完整许可证文本', '#1A237E'));
+    items.push(renderSectionHeader('description', '完整许可证文本', cs.primary));
 
     var licenseLinks = [
       { label: 'GNU GPL v3.0',     url: 'https://www.gnu.org/licenses/gpl-3.0.txt' },
@@ -2923,17 +3155,16 @@ export default function DashboardScreen(ctx: any): any {
             verticalAlignment: 'center'
           }, [
             ctx.UI.Row({ verticalAlignment: 'center' }, [
-              ctx.UI.Icon({ name: 'description', size: 16, tint: '#666' }),
+              ctx.UI.Icon({ name: 'description', size: 16, tint: cs.onSurfaceVariant }),
               ctx.UI.Spacer({ width: 8 }),
-              ctx.UI.Text({ text: link.label, fontSize: 13, color: '#333' })
+              ctx.UI.Text({ text: link.label, fontSize: 13, color: cs.onSurface })
             ]),
-            ctx.UI.Icon({ name: 'open_in_new', size: 16, tint: '#999' })
+            ctx.UI.Icon({ name: 'open_in_new', size: 16, tint: cs.onSurfaceVariant })
           ])
         ]));
       })(licenseLinks[li]);
     }
 
-    // —— 6. 无担保声明 ——
     items.push(ctx.UI.Card({
       elevation: 1,
       modifier: ctx.Modifier.fillMaxWidth().padding({ top: 12, bottom: 10 })
@@ -2948,16 +3179,15 @@ export default function DashboardScreen(ctx: any): any {
         ctx.UI.Text({
           text: '本软件按“原样”提供，不附带任何形式的担保，包括但不限于适销性或特定用途适用性的默示担保。在任何情况下，作者或版权持有人均不对因本软件或本软件的使用而产生的任何索赔、损害或其他责任负责。',
           fontSize: 12,
-          color: '#666'
+          color: cs.onSurfaceVariant
         })
       ])
     ]));
 
-    // 尾部提示
     items.push(ctx.UI.Text({
       text: '本插件运行所依赖的 Operit 平台还使用了若干其他开源库，完整列表可在 Operit 应用的“关于 → 开源许可”中查看。',
       fontSize: 11,
-      color: '#999',
+      color: cs.onSurfaceVariant,
       modifier: ctx.Modifier.padding({ top: 4, bottom: 24 })
     }));
 
@@ -2969,12 +3199,28 @@ export default function DashboardScreen(ctx: any): any {
   // ============================================
 
   function renderBanner() {
+    var bgColor = banner.type === 'error'
+      ? cs.errorContainer
+      : banner.type === 'success'
+        ? cs.primaryContainer
+        : cs.secondaryContainer;
+    var fgColor = banner.type === 'error'
+      ? cs.onErrorContainer
+      : banner.type === 'success'
+        ? cs.onPrimaryContainer
+        : cs.onSecondaryContainer;
+    var bannerIcon = banner.type === 'error'
+      ? 'error'
+      : banner.type === 'success'
+        ? 'check_circle'
+        : 'info';
+
     return ctx.UI.Box({
       modifier: ctx.Modifier.fillMaxWidth().padding(8).align('topCenter'),
       zIndex: 100
     }, [
       ctx.UI.Surface({
-        containerColor: banner.type === 'error' ? '#FFEBEE' : banner.type === 'success' ? '#E8F5E9' : '#E3F2FD',
+        containerColor: bgColor,
         shape: { type: 'rounded', cornerRadius: 8 },
         modifier: ctx.Modifier.fillMaxWidth().padding(8)
       }, [
@@ -2985,21 +3231,156 @@ export default function DashboardScreen(ctx: any): any {
           verticalAlignment: 'center'
         }, [
           ctx.UI.Row({ verticalAlignment: 'center' }, [
-            ctx.UI.Icon({
-              name: banner.type === 'error' ? 'error' : banner.type === 'success' ? 'check_circle' : 'info',
-              size: 20,
-              tint: banner.type === 'error' ? '#C62828' : banner.type === 'success' ? '#2E7D32' : '#0D47A1'
-            }),
+            ctx.UI.Icon({ name: bannerIcon, size: 20, tint: fgColor }),
             ctx.UI.Spacer({ width: 8 }),
-            ctx.UI.Text({
-              text: banner.message, fontSize: 13,
-              color: banner.type === 'error' ? '#C62828' : banner.type === 'success' ? '#2E7D32' : '#0D47A1'
-            })
+            ctx.UI.Text({ text: banner.message, fontSize: 13, color: fgColor })
           ]),
           ctx.UI.IconButton({ icon: 'close', size: 16, onClick: dismissBanner })
         ])
       ])
     ]);
+  }
+
+  // ============================================
+  // 加载项内容（共用）
+  // ============================================
+
+  function renderAddonsContent(showHeader: boolean, padding: number) {
+    var items: any[] = [];
+
+    if (showHeader) {
+      items.push(ctx.UI.Row({
+        horizontalArrangement: 'start',
+        fillMaxWidth: true,
+        verticalAlignment: 'center'
+      }, [
+        ctx.UI.IconButton({ icon: 'arrow_back', onClick: function() { popPage(); return Promise.resolve(); } }),
+        ctx.UI.Spacer({ width: 8 }),
+        ctx.UI.Icon({ name: 'extension', size: 20, tint: cs.primary }),
+        ctx.UI.Spacer({ width: 8 }),
+        ctx.UI.Text({ text: '加载项', fontSize: 18, fontWeight: 'bold', modifier: ctx.Modifier.weight(1) })
+      ]));
+      items.push(ctx.UI.Spacer({ height: 12 }));
+    }
+
+    // 说明卡片
+    items.push(ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 })
+    }, [
+      ctx.UI.Column({ padding: 16 }, [
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'science', size: 20, tint: cs.primary }),
+          ctx.UI.Spacer({ width: 8 }),
+          ctx.UI.Text({ text: 'Python 插件运行时', fontSize: 15, fontWeight: 'bold' })
+        ]),
+        ctx.UI.Spacer({ height: 8 }),
+        ctx.UI.Text({
+          text: '加载项用于扩展 OverMem 的能力，允许用户编写 Python 脚本自定义记忆处理、注入策略、AI 调用等逻辑。',
+          fontSize: 13,
+          color: cs.onSurface
+        }),
+        ctx.UI.Spacer({ height: 8 }),
+        ctx.UI.Text({
+          text: '当前版本尚未启用此功能。',
+          fontSize: 12,
+          color: cs.error,
+          fontWeight: 'bold'
+        })
+      ])
+    ]));
+
+    // 状态卡片
+    items.push(ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 })
+    }, [
+      ctx.UI.Column({ padding: 16 }, [
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'info', size: 18, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 8 }),
+          ctx.UI.Text({ text: '当前状态', fontSize: 14, fontWeight: 'bold' })
+        ]),
+        ctx.UI.Spacer({ height: 8 }),
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'hourglass_empty', size: 16, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({
+            text: ADDON_RUNTIME_AVAILABLE ? '已启用' : '未启用',
+            fontSize: 13,
+            color: ADDON_RUNTIME_AVAILABLE ? cs.primary : cs.onSurfaceVariant
+          })
+        ]),
+        ctx.UI.Spacer({ height: 4 }),
+        ctx.UI.Text({
+          text: '已安装加载项：' + addonCount + ' 个',
+          fontSize: 12,
+          color: cs.onSurfaceVariant
+        })
+      ])
+    ]));
+
+    // 计划功能
+    items.push(ctx.UI.Card({
+      elevation: 2,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ bottom: 10 })
+    }, [
+      ctx.UI.Column({ padding: 16 }, [
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'construction', size: 18, tint: cs.primary }),
+          ctx.UI.Spacer({ width: 8 }),
+          ctx.UI.Text({ text: '计划功能', fontSize: 14, fontWeight: 'bold' })
+        ]),
+        ctx.UI.Spacer({ height: 10 }),
+        ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ bottom: 6 }) }, [
+          ctx.UI.Icon({ name: 'check_box_outline_blank', size: 16, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({ text: '加载并执行 Python 脚本', fontSize: 13, color: cs.onSurface })
+        ]),
+        ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ bottom: 6 }) }, [
+          ctx.UI.Icon({ name: 'check_box_outline_blank', size: 16, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({ text: '记忆处理钩子（注入前 / 整理前）', fontSize: 13, color: cs.onSurface })
+        ]),
+        ctx.UI.Row({ verticalAlignment: 'center', modifier: ctx.Modifier.padding({ bottom: 6 }) }, [
+          ctx.UI.Icon({ name: 'check_box_outline_blank', size: 16, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({ text: '自定义 AI 调用策略', fontSize: 13, color: cs.onSurface })
+        ]),
+        ctx.UI.Row({ verticalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'check_box_outline_blank', size: 16, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ width: 6 }),
+          ctx.UI.Text({ text: '脚本市场与版本管理', fontSize: 13, color: cs.onSurface })
+        ])
+      ])
+    ]));
+
+    // 空状态
+    if (addonList.length === 0) {
+      items.push(ctx.UI.Box({
+        fillMaxWidth: true,
+        height: 200,
+        contentAlignment: 'center'
+      }, [
+        ctx.UI.Column({ horizontalAlignment: 'center' }, [
+          ctx.UI.Icon({ name: 'extension_off', size: 56, tint: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ height: 10 }),
+          ctx.UI.Text({ text: '暂无加载项', fontSize: 14, color: cs.onSurfaceVariant }),
+          ctx.UI.Spacer({ height: 4 }),
+          ctx.UI.Text({ text: '功能开发中，敬请期待', fontSize: 12, color: cs.onSurfaceVariant })
+        ])
+      ]));
+    }
+
+    return ctx.UI.LazyColumn({ fillMaxSize: true, padding: padding }, items);
+  }
+
+  function renderAddonsTab() {
+    return renderAddonsContent(false, 0);
+  }
+
+  function renderAddonsPage() {
+    return renderAddonsContent(true, 16);
   }
 
   // ============================================
@@ -3016,12 +3397,19 @@ export default function DashboardScreen(ctx: any): any {
       case 'confirm': return renderConfirmPage();
       case 'about': return renderAboutPage();
       case 'open_source': return renderOpenSourcePage();
+      case 'addons': return renderAddonsPage();
       default: return ctx.UI.Text({ text: '未知页面' });
     }
   }
 
   return ctx.UI.Box({ fillMaxSize: true }, [
-    renderPage(),
+    ctx.UI.Surface({
+      fillMaxSize: true,
+      alpha: animProgress,
+      containerColor: cs.background
+    }, [
+      renderPage()
+    ]),
     banner.visible ? renderBanner() : ctx.UI.Spacer({ height: 0 })
   ]);
 }

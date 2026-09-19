@@ -1,20 +1,24 @@
 {
   "schema_version": 1,
   "toolpkg_id": "com.operit.overmem",
-  "version": "0.1.0-Alpha010260912(1010)",
+  "version": "0.1.1-Alpha011260919(1011)",
   "author": ["yyswys-yjyj"],
   "main": "dist/main.js",
   "display_name": {
     "zh": "旧忆重逢",
-    "en": "Memories Comes Back"
+    "en": "Over Memory(Memories Comes Back)"
   },
   "description": {
     "zh": "记忆库（开发中）",
     "en": "Mem DB(In-dev)"
   },
   "subpackages": [
-
   ],
   "resources": [
+    {
+      "key": "overmem_apk",
+      "path": "resources/overmem_client/com.serveryyswys.overmem.apk",
+      "mime": "application/vnd.android.package-archive"
+    }
   ]
 }

@@ -1,9 +1,8 @@
-package com.serveryyswys.overmem.ui.features.settingshub
+package com.serveryyswys.overmem.data.settings
 
 import android.util.Base64
 import android.util.Log
 import com.serveryyswys.overmem.data.db.DatabasePaths
-import com.serveryyswys.overmem.data.settings.OverMemSettings
 import org.json.JSONObject
 import java.io.File
 

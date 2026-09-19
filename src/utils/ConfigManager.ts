@@ -14,7 +14,6 @@ export interface OverMemSettings {
   model: string;           // 当前选中的模型
   models: string[];        // 缓存的模型列表
   encryptVersion: number;  // 加密版本号，用于未来升级
-  initTimestamp?: number;
 }
 
 const DEFAULT_SETTINGS: OverMemSettings = {
