@@ -1393,7 +1393,7 @@ export default function DashboardScreen(ctx: any): any {
           modifier: ctx.Modifier.width(120).padding(4)
         }),
         ctx.UI.Button({
-          text: '记忆管理',
+          text: '记忆',
           onClick: function() { return onTabChange('sessions'); },
           leadingIcon: ctx.UI.Icon({ name: 'book', size: 18 }),
           containerColor: homeTab === 'sessions' ? cs.primary : cs.surfaceVariant,
