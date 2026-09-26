@@ -1,7 +1,8 @@
+// ui/../utils/PersonalityHelper.ts
 /// <reference path="../../types/index.d.ts" />
 
-import { logInfo, logError } from './Logger';
-import { DatabaseManager } from '../db/DatabaseManager';
+import { logInfo, logError } from './Logger.js';
+import { DatabaseManager } from '../db/DatabaseManager.js';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 
@@ -42,6 +43,10 @@ export class PersonalityHelper {
     return PersonalityHelper.instance;
   }
 
+  // ============================================
+  // 全量拉取（含 characterSetting）
+  // ============================================
+
   public async fetchAllCharacterCards(): Promise<CharacterCardInfo[]> {
     const now = Date.now();
     if (this.cache.length > 0 && (now - this.cacheTime) < this.CACHE_TTL) {
@@ -49,23 +54,42 @@ export class PersonalityHelper {
       return this.cache;
     }
 
+    // ---- 主路径：Tools.SoftwareSettings.listCharacterCards() ----
     try {
-      logInfo("PersonalityHelper", "调用 toolCall(list_character_cards)...");
-      const result = await toolCall('list_character_cards', {});
-      logInfo("PersonalityHelper", "返回: " + JSON.stringify(result).substring(0, 500));
+      const SS: any = (Tools as any).SoftwareSettings;
+      if (SS && typeof SS.listCharacterCards === 'function') {
+        const result = await SS.listCharacterCards();
+        logInfo("PersonalityHelper", "SoftwareSettings 返回: " + JSON.stringify(result).substring(0, 300));
 
-      if (!result) {
-        logWarn("PersonalityHelper", "返回空");
-        return [];
+        const rawCards = result?.cards || result?.data?.cards || [];
+        const cards: CharacterCardInfo[] = rawCards.map((c: any) => ({
+          id: c.id || '',
+          name: c.name || '',
+          description: c.description || '',
+          characterSetting: c.characterSetting || c.character_setting || '',
+          isDefault: c.isDefault || c.is_default || false
+        }));
+
+        this.cache = cards;
+        this.cacheTime = now;
+        logInfo("PersonalityHelper", "获取 " + cards.length + " 个角色卡（完整版）");
+        return cards;
       }
+    } catch (e: any) {
+      logWarn("PersonalityHelper", "SoftwareSettings.listCharacterCards 失败，回退 toolCall: " + e.message);
+    }
 
-      // 兼容多种返回格式
+    // ---- 降级路径：toolCall('list_character_cards') ----
+    try {
+      const result = await toolCall('list_character_cards', {});
+      logInfo("PersonalityHelper", "toolCall 返回: " + JSON.stringify(result).substring(0, 300));
+
       let rawCards: any[] = [];
-      if (result.cards && Array.isArray(result.cards)) rawCards = result.cards;
-      else if (result.data && result.data.cards && Array.isArray(result.data.cards)) rawCards = result.data.cards;
+      if (result?.cards && Array.isArray(result.cards)) rawCards = result.cards;
+      else if (result?.data?.cards && Array.isArray(result.data.cards)) rawCards = result.data.cards;
       else if (Array.isArray(result)) rawCards = result;
 
-      const cards: CharacterCardInfo[] = rawCards.map(c => ({
+      const cards: CharacterCardInfo[] = rawCards.map((c: any) => ({
         id: c.id || '',
         name: c.name || '',
         description: c.description || '',
@@ -75,18 +99,51 @@ export class PersonalityHelper {
 
       this.cache = cards;
       this.cacheTime = now;
-      logInfo("PersonalityHelper", "获取 " + cards.length + " 个角色卡");
+      logInfo("PersonalityHelper", "获取 " + cards.length + " 个角色卡（降级版）");
       return cards;
     } catch (e: any) {
-      logError("PersonalityHelper", "获取失败: " + e.message);
+      logError("PersonalityHelper", "toolCall 也失败: " + e.message);
       return [];
     }
   }
 
+  // ============================================
+  // 单卡获取（优先用 getCharacterCard，保证字段完整）
+  // ============================================
+
   public async getCharacterCardById(cardId: string): Promise<CharacterCardInfo | null> {
     if (!cardId) return null;
+
+    // 缓存里有 characterSetting 就用
     const cached = this.cache.find(c => c.id === cardId);
-    if (cached) return cached;
+    if (cached && cached.characterSetting) return cached;
+
+    // 直接查单卡（完整）
+    try {
+      const SS: any = (Tools as any).SoftwareSettings;
+      if (SS && typeof SS.getCharacterCard === 'function') {
+        const result = await SS.getCharacterCard(cardId);
+        const c = result?.card || result?.data?.card;
+        if (c) {
+          const info: CharacterCardInfo = {
+            id: c.id || cardId,
+            name: c.name || '',
+            description: c.description || '',
+            characterSetting: c.characterSetting || c.character_setting || '',
+            isDefault: c.isDefault || c.is_default || false
+          };
+          const idx = this.cache.findIndex(x => x.id === cardId);
+          if (idx >= 0) this.cache[idx] = info;
+          else this.cache.push(info);
+          logInfo("PersonalityHelper", "getCharacterCard: " + info.name + ", settingLen=" + info.characterSetting.length);
+          return info;
+        }
+      }
+    } catch (e: any) {
+      logWarn("PersonalityHelper", "getCharacterCard 失败，回退列表: " + e.message);
+    }
+
+    // 回退：列表里找
     const all = await this.fetchAllCharacterCards();
     return all.find(c => c.id === cardId) || null;
   }
@@ -97,6 +154,10 @@ export class PersonalityHelper {
       id: c.id, name: c.name, description: c.description, isDefault: c.isDefault
     }));
   }
+
+  // ============================================
+  // 会话 → 人格
+  // ============================================
 
   public async getSessionCharacterCard(sessionId: string): Promise<{
     cardId: string;
@@ -121,7 +182,7 @@ export class PersonalityHelper {
       return { cardId: '', cardName: '', characterSetting: '' };
     }
 
-    // 手动选择：优先用配置角色卡
+    // 手动选择
     if (config.personalityCardId) {
       logInfo("PersonalityHelper", "手动选择：使用配置卡 " + config.personalityCardId);
       const card = await this.getCharacterCardById(config.personalityCardId);

@@ -1,30 +1,26 @@
+// db/Schema.ts
 /// <reference path="../../types/index.d.ts" />
 
 // ============================================
-// 声明式表结构定义
+// 声明式表结构
 // ============================================
 
 export interface ColumnDef {
   name: string;
-  type: string;                  // SQLite 类型：TEXT / INTEGER / REAL
+  type: string;
   notNull?: boolean;
-  default?: string | number;     // 默认值（仅支持简单标量）
+  default?: string | number;
   primary?: boolean;
 }
 
 export interface TableDef {
   name: string;
   columns: ColumnDef[];
-  // 表级主键（多列主键）
   compositePrimary?: string[];
 }
 
-/**
- * 所有表的期望结构
- * 注意：SQLite 不支持直接修改列类型，只支持 ADD COLUMN
- * 因此所有列的定义仅供参考，迁移只做 ADD COLUMN
- */
 export const EXPECTED_TABLES: TableDef[] = [
+  // ---------- 配置 ----------
   {
     name: 'config',
     columns: [
@@ -33,6 +29,8 @@ export const EXPECTED_TABLES: TableDef[] = [
       { name: 'updated_at', type: 'INTEGER', notNull: true }
     ]
   },
+
+  // ---------- 会话元数据 ----------
   {
     name: 'session_meta',
     columns: [
@@ -45,111 +43,102 @@ export const EXPECTED_TABLES: TableDef[] = [
       { name: 'updated_at', type: 'INTEGER', notNull: true }
     ]
   },
+
+  // ---------- 节点表（统一存储 message / block / summary） ----------
   {
-    name: 'short_segments',
+    name: 'nodes',
     columns: [
       { name: 'id', type: 'INTEGER', primary: true },
-      { name: 'scope_type', type: 'TEXT', notNull: true },
+      { name: 'node_type', type: 'TEXT', notNull: true },     // message | block | summary
+      { name: 'scope_type', type: 'TEXT', notNull: true },    // session | role_card | global
       { name: 'scope_id', type: 'TEXT', notNull: true },
       { name: 'session_id', type: 'TEXT', notNull: true },
-      { name: 'role', type: 'TEXT', notNull: true },
+      { name: 'role', type: 'TEXT', default: "''" },          // message 用：user | assistant
+      { name: 'level', type: 'TEXT', default: "''" },         // block='short' / summary='mid'|'long' / message=''
       { name: 'content', type: 'TEXT', notNull: true },
-      { name: 'timestamp', type: 'INTEGER', notNull: true },
+      { name: 'timestamp', type: 'INTEGER', notNull: true },  // 原始时间（消息时间）
+      { name: 'created_at', type: 'INTEGER', notNull: true },
+      { name: 'updated_at', type: 'INTEGER', notNull: true },
+      { name: 'trashed_at', type: 'INTEGER', default: 'NULL' },
       { name: 'msg_id', type: 'TEXT', default: "''" },
-      { name: 'block_id', type: 'INTEGER', default: 'NULL' },
+      { name: 'seq', type: 'INTEGER', default: 0 },            // 同 scope 内的链序
+      { name: 'is_pending', type: 'INTEGER', default: 0 },
+      { name: 'arousal', type: 'REAL', default: 0.0 },
+      { name: 'recalled_count', type: 'INTEGER', default: 0 },
+      { name: 'last_recalled_at', type: 'INTEGER', default: 0 },
+      { name: 'meta', type: 'TEXT', default: "''" }
+    ]
+  },
+
+  // ---------- 边表 ----------
+  {
+    name: 'edges',
+    columns: [
+      { name: 'id', type: 'INTEGER', primary: true },
+      { name: 'from_node', type: 'INTEGER', notNull: true },
+      { name: 'to_node', type: 'INTEGER', notNull: true },
+      { name: 'edge_type', type: 'TEXT', notNull: true },     // time | fold | recall
+      { name: 'weight', type: 'REAL', default: 1.0 },
+      { name: 'last_active_at', type: 'INTEGER', notNull: true },
       { name: 'created_at', type: 'INTEGER', notNull: true }
     ]
   },
+
+  // ---------- 链元数据（每个 scope 一条） ----------
   {
-    name: 'short_blocks',
+    name: 'chain_meta',
     columns: [
-      { name: 'id', type: 'INTEGER', primary: true },
       { name: 'scope_type', type: 'TEXT', notNull: true },
       { name: 'scope_id', type: 'TEXT', notNull: true },
-      { name: 'content', type: 'TEXT', notNull: true },
-      { name: 'timestamp', type: 'TEXT', notNull: true },
-      { name: 'distance', type: 'REAL', default: 0 },
-      { name: 'segment_count', type: 'INTEGER', default: 0 },
-      { name: 'source_ids', type: 'TEXT', default: "''" },
-      { name: 'session_id', type: 'TEXT', notNull: true },
-      { name: 'created_at', type: 'INTEGER', notNull: true },
+      { name: 'head_id', type: 'INTEGER', default: 0 },       // 最新 message node id
+      { name: 'tail_id', type: 'INTEGER', default: 0 },       // 最早 message node id
+      { name: 'head_seq', type: 'INTEGER', default: 0 },      // 最新 seq
+      { name: 'message_count', type: 'INTEGER', default: 0 },
       { name: 'updated_at', type: 'INTEGER', notNull: true }
-    ]
-  },
-  {
-    name: 'mid_blocks',
-    columns: [
-      { name: 'id', type: 'INTEGER', primary: true },
-      { name: 'scope_type', type: 'TEXT', notNull: true },
-      { name: 'scope_id', type: 'TEXT', notNull: true },
-      { name: 'content', type: 'TEXT', notNull: true },
-      { name: 'timestamp', type: 'TEXT', notNull: true },
-      { name: 'distance', type: 'REAL', default: 20 },
-      { name: 'state', type: 'TEXT', default: "'normal'" },
-      { name: 'source_block_ids', type: 'TEXT', default: "''" },
-      { name: 'source_count', type: 'INTEGER', default: 0 },
-      { name: 'session_id', type: 'TEXT', notNull: true },
-      { name: 'created_at', type: 'INTEGER', notNull: true },
-      { name: 'updated_at', type: 'INTEGER', notNull: true }
-    ]
-  },
-  {
-    name: 'long_blocks',
-    columns: [
-      { name: 'id', type: 'INTEGER', primary: true },
-      { name: 'scope_type', type: 'TEXT', notNull: true },
-      { name: 'scope_id', type: 'TEXT', notNull: true },
-      { name: 'content', type: 'TEXT', notNull: true },
-      { name: 'timestamp', type: 'TEXT', notNull: true },
-      { name: 'distance', type: 'REAL', default: 20 },
-      { name: 'state', type: 'TEXT', default: "'normal'" },
-      { name: 'source_mid_ids', type: 'TEXT', default: "''" },
-      { name: 'source_count', type: 'INTEGER', default: 0 },
-      { name: 'session_id', type: 'TEXT', notNull: true },
-      { name: 'created_at', type: 'INTEGER', notNull: true },
-      { name: 'updated_at', type: 'INTEGER', notNull: true }
-    ]
-  },
-  {
-    name: 'counters',
-    columns: [
-      { name: 'scope_type', type: 'TEXT', notNull: true },
-      { name: 'scope_id', type: 'TEXT', notNull: true },
-      { name: 'segment_count', type: 'INTEGER', default: 0 },
-      { name: 'short_block_count', type: 'INTEGER', default: 0 },
-      { name: 'mid_block_count', type: 'INTEGER', default: 0 },
-      { name: 'long_block_count', type: 'INTEGER', default: 0 }
     ],
     compositePrimary: ['scope_type', 'scope_id']
   },
+
+  // ---------- 注入日志（幂等去重） ----------
   {
-    name: 'pending_segments',
+    name: 'injection_log',
     columns: [
-      { name: 'scope_type', type: 'TEXT', notNull: true },
-      { name: 'scope_id', type: 'TEXT', notNull: true },
-      { name: 'session_id', type: 'TEXT', notNull: true },
-      { name: 'role', type: 'TEXT', notNull: true },
-      { name: 'content', type: 'TEXT', notNull: true },
-      { name: 'timestamp', type: 'INTEGER', notNull: true },
-      { name: 'msg_id', type: 'TEXT', default: "''" },
-      { name: 'updated_at', type: 'INTEGER', notNull: true }
+      { name: 'message_id', type: 'TEXT', notNull: true },
+      { name: 'node_id', type: 'INTEGER', notNull: true },
+      { name: 'injected_at', type: 'INTEGER', notNull: true }
     ],
-    compositePrimary: ['scope_type', 'scope_id', 'session_id', 'role']
+    compositePrimary: ['message_id', 'node_id']
   }
 ];
 
-/**
- * 索引定义
- */
 export const EXPECTED_INDEXES: string[] = [
-  "CREATE INDEX IF NOT EXISTS idx_short_segments_scope ON short_segments(scope_type, scope_id)",
-  "CREATE INDEX IF NOT EXISTS idx_short_segments_session ON short_segments(session_id)",
-  "CREATE INDEX IF NOT EXISTS idx_short_segments_block ON short_segments(block_id)",
-  "CREATE INDEX IF NOT EXISTS idx_short_blocks_scope ON short_blocks(scope_type, scope_id)",
-  "CREATE INDEX IF NOT EXISTS idx_mid_blocks_scope ON mid_blocks(scope_type, scope_id)",
-  "CREATE INDEX IF NOT EXISTS idx_mid_blocks_state ON mid_blocks(state)",
-  "CREATE INDEX IF NOT EXISTS idx_long_blocks_scope ON long_blocks(scope_type, scope_id)",
-  "CREATE INDEX IF NOT EXISTS idx_long_blocks_state ON long_blocks(state)",
-  "CREATE INDEX IF NOT EXISTS idx_pending_scope ON pending_segments(scope_type, scope_id)",
-  "CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_segments(session_id)"
+  // nodes
+  "CREATE INDEX IF NOT EXISTS idx_nodes_scope ON nodes(scope_type, scope_id)",
+  "CREATE INDEX IF NOT EXISTS idx_nodes_session ON nodes(session_id)",
+  "CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(node_type)",
+  "CREATE INDEX IF NOT EXISTS idx_nodes_level ON nodes(level)",
+  "CREATE INDEX IF NOT EXISTS idx_nodes_trashed ON nodes(trashed_at)",
+  "CREATE INDEX IF NOT EXISTS idx_nodes_scope_seq ON nodes(scope_type, scope_id, seq)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_msgid ON nodes(scope_type, scope_id, msg_id) WHERE msg_id != ''",
+
+  // edges
+  "CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node, edge_type)",
+  "CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node, edge_type)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(from_node, to_node, edge_type)",
+
+  // 注入日志
+  "CREATE INDEX IF NOT EXISTS idx_injection_msg ON injection_log(message_id)"
+];
+
+// ============================================
+// 旧表清单（迁移时用于清理）
+// ============================================
+
+export const LEGACY_TABLES: string[] = [
+  'short_segments',
+  'short_blocks',
+  'mid_blocks',
+  'long_blocks',
+  'counters',
+  'pending_segments'
 ];

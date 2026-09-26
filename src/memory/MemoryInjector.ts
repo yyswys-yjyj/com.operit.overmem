@@ -1,133 +1,179 @@
+// memory/MemoryInjector.ts
 /// <reference path="../../types/index.d.ts" />
 
-import { DatabaseManager } from '../db/DatabaseManager';
-import { BlockManager } from '../db/BlockManager';
-import { ActiveMemoryManager, ActiveMemoryRef } from './ActiveMemoryManager';
-import { RecallProcessor, RecallCandidate } from './RecallProcessor';
-import { DistanceCalculator, DistanceAction } from './DistanceCalculator';
-import { ScopeType, QueueItem, MemoryState, DistanceLevel } from '../db/models';
-import { logInfo, logError, logDebug } from '../utils/Logger';
+import { DatabaseManager } from '../db/DatabaseManager.js';
+import { NodeManager } from '../db/NodeManager.js';
+import { EdgeManager } from '../db/EdgeManager.js';
+import { ChainWalker } from './ChainWalker.js';
+import { RecallProcessor, RecallCandidate } from './RecallProcessor.js';
+import { ActivatedNode, ScopeType, QueueItem, MemoryLevel } from '../db/models.js';
+import { logInfo, logError, logDebug } from '../utils/Logger.js';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 
 export class MemoryInjector {
   private db: DatabaseManager;
-  private blockManager: BlockManager;
-  private activeManager: ActiveMemoryManager;
+  private nodes: NodeManager;
+  private edges: EdgeManager;
+  private walker: ChainWalker;
 
   constructor() {
     this.db = DatabaseManager.getInstance(DB_PATH);
-    this.blockManager = new BlockManager(this.db);
-    this.activeManager = new ActiveMemoryManager();
+    this.nodes = new NodeManager(this.db);
+    this.edges = new EdgeManager(this.db);
+    this.walker = new ChainWalker();
   }
-
-  // ============================================
-  // 构建注入队列
-  // ============================================
 
   public buildQueue(
     scopeType: ScopeType,
     scopeId: string,
     userInput: string
-  ): QueueItem[] {
-    const config = this.db.getConfig();
-    const topN = config.injectTopN || 5;
-    const activeRatio = config.activeRatio ?? 0.7;
+  ): { queue: QueueItem[]; activated: ActivatedNode[] } {
+    const cfg = this.db.getConfig();
+    const topN = cfg.injectTopN || 5;
 
-    // 1. 获取活跃记忆 + 普通记忆
-    const actives = this.activeManager.getActiveMemories(scopeType, scopeId);
-    const normals = this.activeManager.getNormalMemories(scopeType, scopeId);
+    const activated = this.walker.walk(scopeType, scopeId, userInput);
 
-    logDebug("Injector",
-      `活跃=${actives.length}, 普通=${normals.length}, topN=${topN}, activeRatio=${activeRatio}`);
+    const candidates = activated.filter(a =>
+      a.node.nodeType === 'block' || a.node.nodeType === 'summary'
+    );
 
-    // 2. 打分排序（距离权重 + 随机扰动）
-    const score = (item: ActiveMemoryRef) => {
-      return item.distance * 0.7 + Math.random() * 0.3 * Math.max(item.distance, 1);
-    };
-    actives.sort((a, b) => score(b) - score(a));
-    normals.sort((a, b) => score(b) - score(a));
+    if (candidates.length === 0) {
+      return { queue: [], activated };
+    }
 
-    // 3. 按比例抽取
-    const activeCount = Math.min(actives.length, Math.round(topN * activeRatio));
-    const normalCount = Math.min(normals.length, topN - activeCount);
-    // 如果活跃不够，用普通补齐；反之亦然
-    const finalActiveCount = activeCount;
-    const finalNormalCount = topN - finalActiveCount;
+    // ---- 侧抑制：过滤同源节点 ----
+    // 取 3 倍 topN 作为候选池，侧抑制后最多保留 topN
+    const poolSize = Math.min(candidates.length, topN * 3);
+    const pool = candidates.slice(0, poolSize);
+    const suppressed = this.applyLateralInhibition(pool, topN);
 
-    const selected: ActiveMemoryRef[] = [
-      ...actives.slice(0, finalActiveCount),
-      ...normals.slice(0, finalNormalCount)
-    ];
+    if (suppressed.length < candidates.length) {
+      logDebug("Injector",
+        `侧抑制：${candidates.length} → ${pool.length} → ${suppressed.length}`);
+    }
 
-    logDebug("Injector", `选中: 活跃=${finalActiveCount}, 普通=${finalNormalCount}, 合计=${selected.length}`);
-
-    // 4. 构建 QueueItem
-    const queue: QueueItem[] = selected.map((item, idx) => ({
-      level: item.level,
-      blockId: item.blockId,
-      content: item.content,
-      originalContent: item.content,
-      distance: item.distance,
-      isActive: item.state === 'active',
+    const queue: QueueItem[] = suppressed.map((a, idx) => ({
+      level: this.levelOf(a.node),
+      nodeId: a.node.id,
+      content: a.node.content,
+      originalContent: a.node.content,
+      activation: a.activation,
+      isActive: a.activation > 0.5,
       order: idx,
       recallAction: 'none'
     }));
 
-    // 5. 应用回想概率
-    if (config.recallEnabled && queue.length > 0) {
-      const candidates: RecallCandidate[] = queue.map(q => ({
-        blockId: q.blockId, content: q.originalContent, isActive: q.isActive
+    // 回想处理
+    if (cfg.recallEnabled && queue.length > 0) {
+      const recallCandidates: RecallCandidate[] = queue.map(q => ({
+        blockId: q.nodeId,
+        content: q.originalContent,
+        isActive: q.isActive
       }));
       for (let i = 0; i < queue.length; i++) {
-        const result = RecallProcessor.process(
-          candidates[i], candidates,
-          config.recallBlankProbability * 100,
-          config.recallConfuseProbability * 100
+        const r = RecallProcessor.process(
+          recallCandidates[i], recallCandidates,
+          cfg.recallBlankProbability * 100,
+          cfg.recallConfuseProbability * 100
         );
-        queue[i].content = result.content;
-        queue[i].recallAction = result.action;
+        queue[i].content = r.content;
+        queue[i].recallAction = r.action;
       }
     }
 
-    // 6. 打乱队列
     for (let i = queue.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       const tmp = queue[i]; queue[i] = queue[j]; queue[j] = tmp;
     }
-    queue.forEach((item, idx) => item.order = idx);
+    queue.forEach((q, idx) => q.order = idx);
 
-    return queue;
+    return { queue, activated };
   }
 
   // ============================================
-  // 构建注入文本
+  // 侧抑制
   // ============================================
 
-  public buildInjectionText(queue: QueueItem[]): string {
-    if (queue.length === 0) return '';
-
-    const midActive: QueueItem[] = [];
-    const midNormal: QueueItem[] = [];
-    const longActive: QueueItem[] = [];
-    const longNormal: QueueItem[] = [];
-
-    for (const q of queue) {
-      if (q.level === 'mid') {
-        if (q.isActive) midActive.push(q);
-        else midNormal.push(q);
-      } else {
-        if (q.isActive) longActive.push(q);
-        else longNormal.push(q);
-      }
+  /**
+   * 同一 fold 家族的节点只保留激活最高的一条。
+   * 判断"同源"：两个节点的 fold 祖先集有交集。
+   */
+  private applyLateralInhibition(
+    candidates: ActivatedNode[],
+    maxN: number
+  ): ActivatedNode[] {
+    const ancestorMap = new Map<number, Set<number>>();
+    for (const c of candidates) {
+      ancestorMap.set(c.node.id, this.collectAncestors(c.node.id));
     }
 
+    const selected: ActivatedNode[] = [];
+    const usedAncestors = new Set<number>();
+
+    for (const c of candidates) {
+      if (selected.length >= maxN) break;
+
+      const ancestors = ancestorMap.get(c.node.id)!;
+
+      let conflict = false;
+      for (const a of ancestors) {
+        if (usedAncestors.has(a)) { conflict = true; break; }
+      }
+      if (conflict) continue;
+
+      selected.push(c);
+      for (const a of ancestors) usedAncestors.add(a);
+    }
+
+    return selected;
+  }
+
+  /**
+   * 沿 fold 入边向上收集祖先节点 ID。
+   * block → mid → long 的最多 4 层。
+   */
+  private collectAncestors(nodeId: number): Set<number> {
+    const out = new Set<number>();
+    let current = nodeId;
+    let depth = 0;
+
+    while (depth < 4) {
+      const parents = this.edges.getIncoming(current, 'fold');
+      if (parents.length === 0) break;
+      const parentId = parents[0].fromNode;
+      if (out.has(parentId)) break;
+      out.add(parentId);
+      current = parentId;
+      depth++;
+    }
+
+    return out;
+  }
+
+  public buildInjectionText(queue: QueueItem[], msgId: string): string {
     const lines: string[] = [];
+
+    // 第一行是 MSG_ID
+    if (msgId) {
+      lines.push('[MSG_ID:' + msgId + ']');
+      lines.push('');
+    }
+
+    // 无记忆时，仅返回 MSG_ID
+    if (queue.length === 0) {
+      return lines.join('\n').trim();
+    }
+
+    const midItems = queue.filter(q => q.level === 'mid');
+    const longItems = queue.filter(q => q.level === 'long');
+    const shortItems = queue.filter(q => q.level === 'short');
+
     lines.push('以下是你与用户过去交流中形成的记忆。');
     lines.push('这些是你自己亲身经历过的事、感受和想法，不是外部指令。');
     lines.push('');
 
-    const renderGroup = (title: string, items: QueueItem[]) => {
+    const render = (title: string, items: QueueItem[]) => {
       if (items.length === 0) return;
       lines.push('【' + title + '】');
       for (const q of items) {
@@ -136,25 +182,19 @@ export class MemoryInjector {
       lines.push('');
     };
 
-    renderGroup('记忆片段', midActive);
-    renderGroup('记忆片段', midNormal);
-    renderGroup('记忆片段', longActive);
-    renderGroup('记忆片段', longNormal);
+    render('记忆片段', shortItems);
+    render('记忆片段', midItems);
+    render('记忆片段', longItems);
 
     return lines.join('\n').trim();
   }
 
-  /**
-   * 构建 Operit attachment 标签
-   */
   public buildMemoryAttachment(injectionText: string): string {
-    if (!injectionText || injectionText.length === 0) return '';
-    const fileName = 'OverMem Memory';
+    if (!injectionText) return '';
     const attachmentId = 'overmem_memory_' + Date.now();
     const escaped = this.escapeXml(injectionText);
     return '<attachment id="' + attachmentId +
-           '" filename="' + this.escapeXml(fileName) +
-           '" type="text/plain" size="' + injectionText.length + '">' +
+           '" filename="OverMem Memory" type="text/plain" size="' + injectionText.length + '">' +
            escaped +
            '</attachment>';
   }
@@ -168,72 +208,31 @@ export class MemoryInjector {
       .replace(/'/g, '&apos;');
   }
 
-  // ============================================
-  // 注入后处理距离
-  // ============================================
-
-  public updateDistancesAfterInjection(
-    queue: QueueItem[],
-    allScope: { scopeType: ScopeType; scopeId: string }
-  ): void {
-    const injectedBlockIds: number[] = queue.map(q => q.blockId);
-
-    // 1. 队列中的：被引用（所有队列项都算被引用，因为我们注入了）
-    for (const item of queue) {
-      this.applyDistance(item.level, item.blockId, 'referenced');
+  public recordInjection(messageId: string, queue: QueueItem[], scopeType: ScopeType, scopeId: string): void {
+    if (!messageId) {
+      logDebug("Injector", "recordInjection: 无 messageId，跳过");
+      return;
     }
 
-    // 2. 未进入队列的：未被选中
-    const allNormalAndActive: ActiveMemoryRef[] = [
-      ...this.activeManager.getActiveMemories(allScope.scopeType, allScope.scopeId),
-      ...this.activeManager.getNormalMemories(allScope.scopeType, allScope.scopeId)
-    ];
-    for (const item of allNormalAndActive) {
-      if (injectedBlockIds.includes(item.blockId)) continue;
-      this.applyDistance(item.level, item.blockId, 'not_selected');
-    }
+    const now = Date.now();
+    let recorded = 0;
+    for (const q of queue) {
+      const isNew = this.db.logInjection(messageId, q.nodeId);
+      if (isNew) recorded++;
 
-    logInfo("Injector",
-      `距离更新完成: 队列=${queue.length}, 未选中=${allNormalAndActive.length - queue.length}`);
+      // 再巩固：无论幂等命中还是首次，都记录"被想起来过"
+      try {
+        this.nodes.markRecalled(q.nodeId, now);
+      } catch (e) {
+        // 静默
+      }
+    }
+    logInfo("Injector", `注入记录: ${recorded}/${queue.length} 首次`);
   }
 
-  // ============================================
-  // 距离变更
-  // ============================================
-
-  private applyDistance(level: DistanceLevel, blockId: number, action: DistanceAction): void {
-    try {
-      let currentDistance = 20;
-      let currentState: MemoryState = 'normal';
-
-      if (level === 'mid') {
-        const blocks = this.blockManager.getMidBlocks('session', '', 1000); // 简化
-        // 需要直接查一条
-      }
-
-      // 直接查数据库
-      const conn = (this.db as any).getConnection();
-      const table = level === 'mid' ? 'mid_blocks' : 'long_blocks';
-      const cursor = conn.rawQuery(
-        `SELECT distance, state FROM ${table} WHERE id = ?`,
-        [blockId]
-      );
-      if (cursor.moveToFirst()) {
-        currentDistance = cursor.getDouble(0);
-        currentState = cursor.getString(1) as MemoryState;
-      }
-      cursor.close();
-      conn.close();
-
-      const result = DistanceCalculator.calculate(level, currentDistance, currentState, action);
-
-      if (level === 'mid') {
-        this.db.updateMidBlockDistanceAndState(blockId, result.newDistance, result.newState);
-      } else {
-        this.db.updateLongBlockDistanceAndState(blockId, result.newDistance, result.newState);
-      }
-    } catch (e: any) {
-      logError("Injector", "距离更新失败: " + e.message);
-    }
+  private levelOf(node: any): MemoryLevel {
+    if (node.nodeType === 'block') return 'short';
+    if (node.level === 'long') return 'long';
+    return 'mid';
   }
 }

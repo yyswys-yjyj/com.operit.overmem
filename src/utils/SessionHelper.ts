@@ -1,17 +1,15 @@
+// utils/SessionHelper.ts
 /// <reference path="../../types/index.d.ts" />
 
-import { logInfo, logError, logDebug } from './Logger';
+import { logInfo, logError, logDebug } from './Logger.js';
 
 declare function toolCall(name: string, params?: any): Promise<any>;
-
-// ============================================
-// 会话信息缓存（title + 角色卡名）
-// ============================================
 
 interface SessionInfo {
   chatId: string;
   title: string;
   characterCardName: string;
+  characterCardId: string;
 }
 
 export class SessionHelper {
@@ -19,7 +17,7 @@ export class SessionHelper {
   private cache: Map<string, SessionInfo> = new Map();
   private allLoaded: boolean = false;
   private lastLoadTime: number = 0;
-  private LOAD_TTL = 20000;   // 20 秒
+  private LOAD_TTL = 20000;
 
   private constructor() {}
 
@@ -30,9 +28,6 @@ export class SessionHelper {
     return SessionHelper.instance;
   }
 
-  /**
-   * 加载全部会话（调用 toolCall('list_chats')）
-   */
   public async refreshAll(): Promise<void> {
     const now = Date.now();
     if (this.allLoaded && (now - this.lastLoadTime) < this.LOAD_TTL) return;
@@ -54,7 +49,8 @@ export class SessionHelper {
         this.cache.set(id, {
           chatId: id,
           title: c.title || '',
-          characterCardName: c.characterCardName || c.character_card_name || ''
+          characterCardName: c.characterCardName || c.character_card_name || '',
+          characterCardId: c.characterCardId || c.character_card_id || ''
         });
       }
       this.allLoaded = true;
@@ -65,33 +61,41 @@ export class SessionHelper {
     }
   }
 
-  /**
-   * 获取会话信息（标题 + 角色卡名）
-   */
-  public async getSessionInfo(chatId: string): Promise<{ title: string; characterCardName: string }> {
-    if (!chatId) return { title: '', characterCardName: '' };
+  public async getSessionInfo(chatId: string): Promise<{
+    title: string;
+    characterCardName: string;
+    characterCardId: string;
+  }> {
+    if (!chatId) return { title: '', characterCardName: '', characterCardId: '' };
 
-    // 缓存命中
     if (this.cache.has(chatId)) {
       const info = this.cache.get(chatId)!;
-      return { title: info.title, characterCardName: info.characterCardName };
+      return {
+        title: info.title,
+        characterCardName: info.characterCardName,
+        characterCardId: info.characterCardId
+      };
     }
 
-    // 未命中，尝试刷新全部
     await this.refreshAll();
 
     if (this.cache.has(chatId)) {
       const info = this.cache.get(chatId)!;
-      return { title: info.title, characterCardName: info.characterCardName };
+      return {
+        title: info.title,
+        characterCardName: info.characterCardName,
+        characterCardId: info.characterCardId
+      };
     }
 
-    return { title: '', characterCardName: '' };
+    return { title: '', characterCardName: '', characterCardId: '' };
   }
 
-  /**
-   * 手动写入缓存（可选）
-   */
-  public setSessionInfo(chatId: string, title: string, cardName: string): void {
-    this.cache.set(chatId, { chatId, title, characterCardName: cardName });
+  public setSessionInfo(chatId: string, title: string, cardName: string, cardId: string = ''): void {
+    this.cache.set(chatId, {
+      chatId, title,
+      characterCardName: cardName,
+      characterCardId: cardId
+    });
   }
 }

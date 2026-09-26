@@ -1,124 +1,157 @@
+// memory/MidTerm.ts
 /// <reference path="../../types/index.d.ts" />
 
-import { DatabaseManager } from '../db/DatabaseManager';
-import { BlockManager } from '../db/BlockManager';
-import { ScopeType } from '../db/models';
-import { PersonalityHelper } from '../utils/PersonalityHelper';
-import { CounterManager } from '../utils/CounterManager';
-import { callAI, buildPersonaSystemPrompt } from '../utils/AIHelper';
-import { LongTermMemory } from './LongTerm';
-import { logInfo, logError, logDebug } from '../utils/Logger';
+import { DatabaseManager } from '../db/DatabaseManager.js';
+import { NodeManager } from '../db/NodeManager.js';
+import { EdgeManager } from '../db/EdgeManager.js';
+import { PersonalityHelper } from '../utils/PersonalityHelper.js';
+import { callAI, buildPersonaSystemPrompt } from '../utils/AIHelper.js';
+import { LongTermMemory } from './LongTerm.js';
+import { ScopeType, MemoryNode, NodeMeta } from '../db/models.js';
+import { extractJSON } from '../utils/JSONExtractor.js';
+import { logInfo, logError, logWarn, logDebug } from '../utils/Logger.js';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 
 export class MidTermMemory {
   private db: DatabaseManager;
-  private blockManager: BlockManager;
+  private nodes: NodeManager;
+  private edges: EdgeManager;
   private personality: PersonalityHelper;
-  private counterManager: CounterManager;
-  private longTerm: LongTermMemory;
 
   constructor() {
     this.db = DatabaseManager.getInstance(DB_PATH);
-    this.blockManager = new BlockManager(this.db);
+    this.nodes = new NodeManager(this.db);
+    this.edges = new EdgeManager(this.db);
     this.personality = PersonalityHelper.getInstance();
-    this.counterManager = CounterManager.getInstance();
-    this.longTerm = new LongTermMemory();
   }
 
-  public async checkConsolidation(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<boolean> {
-    const config = this.db.getConfig();
-    const threshold = config.midThreshold || 40;
-    const counters = this.counterManager.getCounters(scopeType, scopeId);
-    logDebug("MidTerm", `短期块计数: ${counters.shortBlockCount} / 阈值: ${threshold}`);
-    if (counters.shortBlockCount >= threshold) {
-      logInfo("MidTerm", "达到中期整理阈值，触发整理");
+  public async checkConsolidation(
+    scopeType: ScopeType, scopeId: string, sessionId: string
+  ): Promise<boolean> {
+    const cfg = this.db.getConfig();
+    const threshold = cfg.midThreshold || 40;
+    const unfolded = this.nodes.getUnfoldedBlocks(scopeType, scopeId);
+    logDebug("MidTerm", `未折叠短块=${unfolded.length}/${threshold}`);
+    if (unfolded.length >= threshold) {
+      logInfo("MidTerm", "达到中期整理阈值");
       await this.consolidate(scopeType, scopeId, sessionId);
       return true;
     }
     return false;
   }
 
-    public async consolidate(scopeType: ScopeType, scopeId: string, sessionId: string): Promise<number> {
+  public async consolidate(
+    scopeType: ScopeType, scopeId: string, sessionId: string
+  ): Promise<number> {
     logInfo("MidTerm", `开始中期整理: ${scopeType}=${scopeId}`);
-
     try {
-      const shortBlocks = this.blockManager.getShortBlocks(scopeType, scopeId);
-      if (shortBlocks.length === 0) {
-        logInfo("MidTerm", "没有短期块");
+      const cfg = this.db.getConfig();
+      const threshold = cfg.midThreshold || 40;
+      const unfolded = this.nodes.getUnfoldedBlocks(scopeType, scopeId);
+      if (unfolded.length === 0) {
+        logInfo("MidTerm", "无未折叠短块");
         return -1;
       }
 
-      const config = this.db.getConfig();
-      const threshold = config.midThreshold || 40;
-      const takeCount = Math.min(shortBlocks.length, threshold);
+      const takeCount = Math.min(unfolded.length, threshold);
+      const selected = unfolded.slice(0, takeCount);
+      const sourceIds = selected.map(b => b.id);
 
-      // 按时间升序取最早的 N 个
-      shortBlocks.sort((a, b) => a.createdAt - b.createdAt);
-      const selected = shortBlocks.slice(0, takeCount);
-      const blockIds = selected.map(b => b.id!);
+      // 时间范围
+      const timeStart = selected[0].timestamp;
+      const timeEnd = selected[selected.length - 1].timestamp;
 
+      // 拼对话记录
       const lines: string[] = [];
-      let roundNum = 1;
+      let n = 1;
       for (const block of selected) {
-        const date = new Date(block.createdAt);
+        const date = new Date(block.timestamp);
         const ds = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
-        lines.push(`===== 第 ${roundNum} 轮，${ds} =====`);
+        lines.push(`===== 第 ${n} 轮，${ds} =====`);
         lines.push(block.content);
-        roundNum++;
+        n++;
       }
       const conversationText = lines.join('\n\n');
 
       const personalityText = await this.getPersonalityForScope(scopeType, scopeId);
       const systemPrompt = buildPersonaSystemPrompt(personalityText);
-      const userPrompt = `以下是你与用户的若干轮对话记录。请回顾这些对话，以角色的身份，将你觉得重要的经历、感受或信息整理成一段连贯的中期记忆。
+
+      // ★ 新的 prompt：输出结构化 JSON
+      const userPrompt = `以下是你与用户的若干轮对话记录。请回顾这些对话，以角色的身份，将你觉得重要的经历、感受或信息整理成一段**主题层**记忆。
+
+【主题层的定义】
+不是简单的事件罗列，而是抽象出一段时间内**反复出现的话题、模式、情绪倾向**。
+- 事件是"周二修了个 bug"
+- 主题是"用户最近持续在跟性能问题纠缠，情绪从焦虑转向决心"
+
+【输出格式】
+必须输出严格的 JSON，前后不要有任何说明文字。格式：
+
+{
+  "title": "一句话主题标题，不超过 20 字",
+  "summary": "以角色第一人称叙述的总结，200 字以内",
+  "keywords": ["关键词1", "关键词2", "最多 8 个"],
+  "emotionalArc": "情绪走向的一句话描述",
+  "recurringPatterns": ["反复出现的模式1", "最多 5 个"]
+}
 
 对话记录：
-${conversationText}
-
-请以第一人称叙述，直接输出中期记忆内容，不要加额外说明。`;
+${conversationText}`;
 
       const result = await callAI([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ]);
 
+      // 解析 JSON
       let summary = '（AI 生成失败）';
+      let meta: NodeMeta | null = null;
+
       if (result.success && result.content) {
-        summary = result.content.trim();
+        const parsed = extractJSON(result.content);
+        if (parsed && parsed.summary) {
+          summary = String(parsed.summary);
+          meta = {
+            type: 'theme',
+            title: String(parsed.title || ''),
+            keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+            timeStart,
+            timeEnd,
+            emotionalArc: String(parsed.emotionalArc || ''),
+            recurringPatterns: Array.isArray(parsed.recurringPatterns) ? parsed.recurringPatterns : []
+          };
+          logInfo("MidTerm", `JSON 解析成功: title="${meta.title}", keywords=${meta.keywords.length} 个`);
+        } else {
+          // 解析失败 → 保留原始文本作为 summary
+          summary = result.content.trim();
+          logWarn("MidTerm", "JSON 解析失败，使用原始文本");
+        }
       } else {
         logError("MidTerm", "AI 生成失败: " + (result.error || '未知错误'));
         summary = conversationText.substring(0, 300) + '...';
       }
 
-      const blockId = this.blockManager.createMidBlock(
-        scopeType, scopeId, sessionId, summary, blockIds
+      // 汇总源块 arousal
+      let maxArousalValue = 0;
+      for (const b of selected) {
+        if ((b.arousal || 0) > maxArousalValue) maxArousalValue = b.arousal;
+      }
+
+      const midTs = selected[selected.length - 1].timestamp;
+      const midId = this.nodes.addMidBlock(
+        scopeType, scopeId, sessionId, summary, midTs, maxArousalValue, meta
       );
 
-      // 删除用到的短期块（含其段），完成记忆升级
-      for (const sid of blockIds) {
-        try {
-          this.db.deleteShortBlock(sid);
-        } catch (e: any) {
-          logError("MidTerm", "删除短期块失败: id=" + sid + ", " + e.message);
-        }
-      }
-      logInfo("MidTerm", `已删除 ${blockIds.length} 个短期块`);
+      this.edges.addEdges(midId, sourceIds, 'fold', cfg.foldEdgeBaseWeight);
 
-      // 计数器
-      this.counterManager.resetShortBlocks(scopeType, scopeId);
-      this.counterManager.incrementMidBlock(scopeType, scopeId, 1);
+      logInfo("MidTerm", `中期块 id=${midId}, 来源 ${sourceIds.length} 个短块`);
 
-      const counters = this.counterManager.getCounters(scopeType, scopeId);
-      logInfo("MidTerm",
-        `中期块创建完成: id=${blockId}, 来源=${blockIds.length} 个短期块, ` +
-        `当前中期块累计=${counters.midBlockCount}`);
-
-      // 异步触发长期整理，不阻塞
-      this.longTerm.checkConsolidation(scopeType, scopeId, sessionId)
+      const longTerm = new LongTermMemory();
+      longTerm.checkConsolidation(scopeType, scopeId, sessionId)
         .catch((e: any) => logError("MidTerm", "异步长期整理失败: " + e.message));
 
-      return blockId;
+      return midId;
     } catch (e: any) {
       logError("MidTerm", "整理失败: " + e.message);
       return -1;
@@ -130,7 +163,12 @@ ${conversationText}
       const card = await this.personality.getCharacterCardById(scopeId);
       return card?.characterSetting || '';
     }
-    // session / global：走 PersonalityHelper 统一处理 auto/manual
     return await this.personality.getPersonalityText(scopeId);
+  }
+
+  public async forceConsolidate(
+    scopeType: ScopeType, scopeId: string, sessionId: string
+  ): Promise<number> {
+    return this.consolidate(scopeType, scopeId, sessionId);
   }
 }

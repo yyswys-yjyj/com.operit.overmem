@@ -1,65 +1,160 @@
+// db/models.ts
 /// <reference path="../../types/index.d.ts" />
 
 // ============================================
-// 数据模型定义（v3 - 活跃记忆组 + 回想概率）
+// 基础枚举
 // ============================================
 
-/**
- * 记忆块层级
- */
-export type MemoryLevel = 'short' | 'mid' | 'long';
-
-/**
- * 记忆状态
- */
-export type MemoryState = 'normal' | 'active' | 'trash';
-
-/**
- * 作用域类型
- */
 export type ScopeType = 'session' | 'role_card' | 'global';
 
-export type DistanceLevel = 'mid' | 'long';
+export type MemoryLevel = 'short' | 'mid' | 'long';
 
-/**
- * 配置项
- */
+export type MemoryState = 'normal' | 'active' | 'trash';
+
+export type NodeType = 'message' | 'block' | 'summary';
+
+export type EdgeType = 'time' | 'fold' | 'recall';
+
+// ============================================
+// 节点
+// ============================================
+
+export interface MemoryNode {
+  id: number;
+  nodeType: NodeType;
+  scopeType: ScopeType;
+  scopeId: string;
+  sessionId: string;
+  role: string;
+  level: string;
+  content: string;
+  timestamp: number;
+  createdAt: number;
+  updatedAt: number;
+  trashedAt: number | null;
+  msgId: string;
+  seq: number;
+  isPending: boolean;
+  arousal: number;
+  recalledCount: number;
+  lastRecalledAt: number;
+  meta: NodeMeta | null;
+}
+
+// ============================================
+// 边
+// ============================================
+
+export interface MemoryEdge {
+  id: number;
+  fromNode: number;
+  toNode: number;
+  edgeType: EdgeType;
+  weight: number;
+  lastActiveAt: number;
+  createdAt: number;
+}
+
+// ============================================
+// 链元数据
+// ============================================
+
+export interface ChainMeta {
+  scopeType: ScopeType;
+  scopeId: string;
+  headId: number;
+  tailId: number;
+  headSeq: number;
+  messageCount: number;
+  updatedAt: number;
+}
+
+// ============================================
+// 配置
+// ============================================
+
 export interface OverMemConfig {
-  // 记忆阈值
+  // 阈值
   shortThreshold: number;
   midThreshold: number;
   longThreshold: number;
 
-  // 透传设置
+  // 透传
   sessionPassthrough: boolean;
   globalPassthrough: boolean;
 
+  // 人格
   personalityMode: 'auto' | 'manual';
   personalityCardId: string;
   personalityCustomText: string;
   personalityName: string;
 
-  // 记忆注入
+  // 注入
   injectTopN: number;
   activeRatio: number;
   recallEnabled: boolean;
   recallBlankProbability: number;
   recallConfuseProbability: number;
 
-  // 调试模式
+  // 衰减
+  timeEdgeDecayDays: number;    // time 边衰减半衰期（天）
+  foldEdgeBaseWeight: number;   // fold 边初始权重
+  recallEdgeDecayDays: number;  // recall 边衰减半衰期
+  edgeDeathThreshold: number;   // 边低于此权重视为死亡
+
+  // 激活
+  activationSeedWeight: number;    // 种子节点初始激活
+  activationHopDecay: number;      // 每跳衰减
+  activationMinThreshold: number;  // 低于此激活值不再扩散
+
+  // 调试
   debugMode: boolean;
+  previewEnabled: boolean;
 
   // 系统
   initTimestamp: number;
   version: number;
-
-  // 预览计划
-  previewEnabled: boolean;
+  // 噪音
+  noiseTemperature: number;         // 0.0 ~ 1.0，默认 0.3
+  synapticFailureEnabled: boolean;  // 是否启用突触传递失败，默认 true
+  
+  lastReplayAt: number;        // ← 上次睡眠重放时间戳
+  replayIntervalMs: number;    // ← 重放间隔（默认 6h）
+  replayMinBatch: number;      // ← 触发最小批
+  replayBatchSize: number;     // ← 每次折叠量
 }
 
-/**
- * 会话元数据
- */
+// ============================================
+// 结构化元数据
+// ============================================
+
+/** 主题层元数据（mid） */
+export interface ThemeMeta {
+  type: 'theme';
+  title: string;
+  keywords: string[];
+  timeStart: number;
+  timeEnd: number;
+  emotionalArc: string;
+  recurringPatterns: string[];
+}
+
+/** 叙事层元数据（long） */
+export interface NarrativeMeta {
+  type: 'narrative';
+  title: string;
+  chapters: Array<{ period: string; theme: string; summary: string }>;
+  characterArc: string;
+  relationshipEvolution: string;
+  longTermPatterns: string[];
+}
+
+export type NodeMeta = ThemeMeta | NarrativeMeta;
+
+// ============================================
+// 会话元数据
+// ============================================
+
 export interface SessionMeta {
   sessionId: string;
   title: string;
@@ -70,137 +165,41 @@ export interface SessionMeta {
   updatedAt: number;
 }
 
-/**
- * 短期记忆段（消息原文）
- */
-export interface ShortSegment {
-  id?: number;
-  scopeType: ScopeType;
-  scopeId: string;
-  sessionId: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-  msgId: string;
-  blockId: number | null;
-  createdAt: number;
+// ============================================
+// 激活结果
+// ============================================
+
+export interface ActivatedNode {
+  node: MemoryNode;
+  activation: number;
+  via: 'seed' | 'time' | 'fold' | 'recall';
+  distance: number;   // 跳数
+  parentId: number;
 }
 
-/**
- * 短期记忆块
- */
-export interface ShortBlock {
-  id?: number;
-  scopeType: ScopeType;
-  scopeId: string;
-  content: string;
-  timestamp: string;
-  distance: number;              // 短期固定为 0
-  segmentCount: number;
-  sourceIds: string;
-  sessionId: string;
-  createdAt: number;
-  updatedAt: number;
-}
+// ============================================
+// 注入队列项
+// ============================================
 
-/**
- * 中期记忆块
- */
-export interface MidBlock {
-  id?: number;
-  scopeType: ScopeType;
-  scopeId: string;
-  content: string;
-  timestamp: string;
-  distance: number;              // 初始 20
-  state: MemoryState;            // normal | active | trash
-  sourceBlockIds: string;
-  sourceCount: number;
-  sessionId: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/**
- * 长期记忆块
- */
-export interface LongBlock {
-  id?: number;
-  scopeType: ScopeType;
-  scopeId: string;
-  content: string;
-  timestamp: string;
-  distance: number;              // 初始 20
-  state: MemoryState;
-  sourceMidIds: string;
-  sourceCount: number;
-  sessionId: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-/**
- * 距离更新结果
- */
-export interface DistanceUpdateResult {
-  blockId: number;
-  level: MemoryLevel;
-  oldDistance: number;
-  newDistance: number;
-  oldState: MemoryState;
-  newState: MemoryState;
-  change: number;
-}
-
-/**
- * 队列项（用于注入）
- */
 export interface QueueItem {
-  level: DistanceLevel;
-  blockId: number;
-  content: string;               // 已处理（可能挖空/混淆）
-  originalContent: string;       // 原始内容（用于距离处理）
-  distance: number;
+  level: MemoryLevel;
+  nodeId: number;
+  content: string;
+  originalContent: string;
+  activation: number;
   isActive: boolean;
-  order: number;                 // 打乱后的顺序
+  order: number;
   recallAction: 'none' | 'blank' | 'confuse';
 }
 
-/**
- * 计数器
- */
-export interface Counters {
-  segmentCount: number;
-  shortBlockCount: number;
-  midBlockCount: number;
-  longBlockCount: number;
-}
+// ============================================
+// 统计
+// ============================================
 
-/**
- * 块统计信息
- */
 export interface BlockStats {
-  totalShortBlocks: number;
+  totalMessages: number;
+  totalBlocks: number;
   totalMidBlocks: number;
   totalLongBlocks: number;
-  totalActiveBlocks: number;
-  totalSegments: number;
-}
-
-/**
- * 暂存区段（pending_segments 表）
- * 主键：(scope_type, scope_id, session_id, role)
- * - session 模式下 scope_id === session_id，天然按会话区分
- * - role_card / global 模式下跨会话共享，是设计预期
- * - 同一 (scope, session, role) 只保留一条，新数据覆盖旧数据
- */
-export interface PendingSegment {
-  scopeType: ScopeType;
-  scopeId: string;
-  sessionId: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-  msgId: string;
-  updatedAt: number;
+  totalActiveNodes: number;
 }

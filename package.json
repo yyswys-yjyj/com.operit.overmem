@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "segmentit": "^2.0.3"
   }
 }
