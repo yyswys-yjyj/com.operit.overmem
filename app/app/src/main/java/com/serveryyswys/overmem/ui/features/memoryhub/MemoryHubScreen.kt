@@ -6,14 +6,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -24,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.serveryyswys.overmem.data.model.MemoryLevel
-import androidx.compose.material3.ExperimentalMaterial3Api
 
 sealed interface MemoryPage {
     data object List : MemoryPage
@@ -43,6 +44,7 @@ fun MemoryHubScreen(viewModel: MemoryHubViewModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var memoryPage by remember { mutableStateOf<MemoryPage>(MemoryPage.List) }
     var sessionPage by remember { mutableStateOf<SessionPage>(SessionPage.List) }
+    var memoryViewMode by rememberSaveable { mutableStateOf("list") }
 
     BackHandler(enabled = memoryPage !is MemoryPage.List && tab == 0) {
         memoryPage = when (val p = memoryPage) {
@@ -109,7 +111,7 @@ fun MemoryHubScreen(viewModel: MemoryHubViewModel = viewModel()) {
                     text = { Text(title) },
                     icon = {
                         Icon(
-                            if (index == 0) Icons.Default.Psychology else Icons.Default.Chat,
+                            if (index == 0) Icons.Default.Psychology else Icons.AutoMirrored.Filled.Chat,
                             contentDescription = title,
                             modifier = Modifier.size(18.dp)
                         )
@@ -119,7 +121,24 @@ fun MemoryHubScreen(viewModel: MemoryHubViewModel = viewModel()) {
         }
 
         when (tab) {
-            0 -> MemoryListContent(viewModel) { level, id -> memoryPage = MemoryPage.Detail(level, id) }
+            0 -> {
+                ViewModeToggle(memoryViewMode) { memoryViewMode = it }
+                when (memoryViewMode) {
+                    "list" -> MemoryListContent(viewModel) { level, id ->
+                        memoryPage = MemoryPage.Detail(level, id)
+                    }
+                    "topology" -> {
+                        val state by viewModel.state.collectAsState()
+                        TopologyView(
+                            memories = state.memories,
+                            sessions = state.sessions,
+                            onOpen = { level, id ->
+                                memoryPage = MemoryPage.Detail(level, id)
+                            }
+                        )
+                    }
+                }
+            }
             1 -> SessionListContent(viewModel) { sid -> sessionPage = SessionPage.Detail(sid) }
         }
     }

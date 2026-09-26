@@ -77,7 +77,7 @@ export class MidTermMemory {
       const personalityText = await this.getPersonalityForScope(scopeType, scopeId);
       const systemPrompt = buildPersonaSystemPrompt(personalityText);
 
-      // ★ 新的 prompt：输出结构化 JSON
+      // 新的 prompt：输出结构化 JSON
       const userPrompt = `以下是你与用户的若干轮对话记录。请回顾这些对话，以角色的身份，将你觉得重要的经历、感受或信息整理成一段**主题层**记忆。
 
 【主题层的定义】

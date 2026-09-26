@@ -29,24 +29,50 @@ data class SettingsUiState(
     val testResult: String = "",
     val isLoadingModels: Boolean = false,
 
-    // 记忆配置
-    val shortThreshold: Int = 20,
+    // 记忆阈值（v4：只有主题/叙事）
     val midThreshold: Int = 40,
     val longThreshold: Int = 20,
+
+    // 记忆注入
     val injectTopN: Int = 5,
-    val activeRatio: Double = 0.7,
     val recallEnabled: Boolean = true,
-    val passthroughMode: String = "none",   // none | role_card | global
-    val personalityMode: String = "auto",   // auto | manual
+
+    // 联想噪声
+    val noiseTemperature: Double = 0.3,
+    val synapticFailureEnabled: Boolean = true,
+
+    // 激活扩散
+    val activationSeedWeight: Double = 1.0,
+    val activationHopDecay: Double = 0.6,
+    val activationMinThreshold: Double = 0.05,
+
+    // 边衰减
+    val timeEdgeDecayDays: Int = 30,
+    val foldEdgeBaseWeight: Double = 1.0,
+    val recallEdgeDecayDays: Int = 60,
+    val edgeDeathThreshold: Double = 0.05,
+
+    // 睡眠重放
+    val replayIntervalMs: Long = 6L * 60 * 60 * 1000,
+    val replayMinBatch: Int = 5,
+    val replayBatchSize: Int = 10,
+    val lastReplayAt: Long = 0L,
+
+    // 透传
+    val passthroughMode: String = "none",
+
+    // 人格
+    val personalityMode: String = "auto",
     val personalityCardId: String = "",
     val personalityCustomText: String = "",
     val personalityName: String = "",
+
+    // 调试
     val debugMode: Boolean = false,
 
     // 日志
     val logSize: Long = 0L,
 
-    // 状态
     val error: String? = null
 )
 
@@ -87,12 +113,30 @@ class SettingsViewModel : ViewModel() {
                         apiKey = ai.apiKey,
                         model = ai.model,
                         models = ai.models,
-                        shortThreshold = mem.shortThreshold,
+
                         midThreshold = mem.midThreshold,
                         longThreshold = mem.longThreshold,
+
                         injectTopN = mem.injectTopN,
-                        activeRatio = mem.activeRatio,
                         recallEnabled = mem.recallEnabled,
+
+                        noiseTemperature = mem.noiseTemperature,
+                        synapticFailureEnabled = mem.synapticFailureEnabled,
+
+                        activationSeedWeight = mem.activationSeedWeight,
+                        activationHopDecay = mem.activationHopDecay,
+                        activationMinThreshold = mem.activationMinThreshold,
+
+                        timeEdgeDecayDays = mem.timeEdgeDecayDays,
+                        foldEdgeBaseWeight = mem.foldEdgeBaseWeight,
+                        recallEdgeDecayDays = mem.recallEdgeDecayDays,
+                        edgeDeathThreshold = mem.edgeDeathThreshold,
+
+                        replayIntervalMs = mem.replayIntervalMs,
+                        replayMinBatch = mem.replayMinBatch,
+                        replayBatchSize = mem.replayBatchSize,
+                        lastReplayAt = mem.lastReplayAt,
+
                         passthroughMode = when {
                             mem.globalPassthrough -> "global"
                             mem.sessionPassthrough -> "role_card"
@@ -113,17 +157,48 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    // ============ 编辑字段 ============
+    // ============ AI 配置 ============
 
     fun setBasicUrl(v: String) { _state.value = _state.value.copy(basicUrl = v) }
     fun setApiKey(v: String) { _state.value = _state.value.copy(apiKey = v) }
     fun setModel(v: String) { _state.value = _state.value.copy(model = v) }
-    fun setShortThreshold(v: Int) { _state.value = _state.value.copy(shortThreshold = v) }
+
+    // ============ 阈值 ============
+
     fun setMidThreshold(v: Int) { _state.value = _state.value.copy(midThreshold = v) }
     fun setLongThreshold(v: Int) { _state.value = _state.value.copy(longThreshold = v) }
+
+    // ============ 注入 ============
+
     fun setInjectTopN(v: Int) { _state.value = _state.value.copy(injectTopN = v) }
-    fun setActiveRatio(v: Double) { _state.value = _state.value.copy(activeRatio = v) }
     fun setRecallEnabled(v: Boolean) { _state.value = _state.value.copy(recallEnabled = v) }
+
+    // ============ 噪声 ============
+
+    fun setNoiseTemperature(v: Double) { _state.value = _state.value.copy(noiseTemperature = v) }
+    fun setSynapticFailureEnabled(v: Boolean) { _state.value = _state.value.copy(synapticFailureEnabled = v) }
+
+    // ============ 激活 ============
+
+    fun setActivationSeedWeight(v: Double) { _state.value = _state.value.copy(activationSeedWeight = v) }
+    fun setActivationHopDecay(v: Double) { _state.value = _state.value.copy(activationHopDecay = v) }
+    fun setActivationMinThreshold(v: Double) { _state.value = _state.value.copy(activationMinThreshold = v) }
+
+    // ============ 边衰减 ============
+
+    fun setTimeEdgeDecayDays(v: Int) { _state.value = _state.value.copy(timeEdgeDecayDays = v) }
+    fun setFoldEdgeBaseWeight(v: Double) { _state.value = _state.value.copy(foldEdgeBaseWeight = v) }
+    fun setRecallEdgeDecayDays(v: Int) { _state.value = _state.value.copy(recallEdgeDecayDays = v) }
+    fun setEdgeDeathThreshold(v: Double) { _state.value = _state.value.copy(edgeDeathThreshold = v) }
+
+    // ============ 睡眠重放 ============
+
+    fun setReplayIntervalMs(v: Long) { _state.value = _state.value.copy(replayIntervalMs = v) }
+    fun setReplayMinBatch(v: Int) { _state.value = _state.value.copy(replayMinBatch = v) }
+    fun setReplayBatchSize(v: Int) { _state.value = _state.value.copy(replayBatchSize = v) }
+
+    // ============ 透传 / 人格 / 调试 ============
+
     fun setPassthroughMode(v: String) { _state.value = _state.value.copy(passthroughMode = v) }
     fun setPersonalityMode(v: String) { _state.value = _state.value.copy(personalityMode = v) }
     fun setPersonalityCardId(v: String) { _state.value = _state.value.copy(personalityCardId = v) }
@@ -131,7 +206,7 @@ class SettingsViewModel : ViewModel() {
     fun setPersonalityName(v: String) { _state.value = _state.value.copy(personalityName = v) }
     fun setDebugMode(v: Boolean) { _state.value = _state.value.copy(debugMode = v) }
 
-    // ============ 模型列表 / 测试 ============
+    // ============ 模型 / 测试 ============
 
     fun fetchModels() {
         val s = _state.value
@@ -182,7 +257,6 @@ class SettingsViewModel : ViewModel() {
         val s = _state.value
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                // AI 配置
                 ConfigManager.save(
                     OverMemSettings(
                         basicUrl = s.basicUrl.trim(),
@@ -191,14 +265,29 @@ class SettingsViewModel : ViewModel() {
                         models = s.models
                     )
                 )
-                // 记忆配置
                 val mem = dao.getConfig().copy(
-                    shortThreshold = s.shortThreshold,
                     midThreshold = s.midThreshold,
                     longThreshold = s.longThreshold,
+
                     injectTopN = s.injectTopN,
-                    activeRatio = s.activeRatio,
                     recallEnabled = s.recallEnabled,
+
+                    noiseTemperature = s.noiseTemperature,
+                    synapticFailureEnabled = s.synapticFailureEnabled,
+
+                    activationSeedWeight = s.activationSeedWeight,
+                    activationHopDecay = s.activationHopDecay,
+                    activationMinThreshold = s.activationMinThreshold,
+
+                    timeEdgeDecayDays = s.timeEdgeDecayDays,
+                    foldEdgeBaseWeight = s.foldEdgeBaseWeight,
+                    recallEdgeDecayDays = s.recallEdgeDecayDays,
+                    edgeDeathThreshold = s.edgeDeathThreshold,
+
+                    replayIntervalMs = s.replayIntervalMs,
+                    replayMinBatch = s.replayMinBatch,
+                    replayBatchSize = s.replayBatchSize,
+
                     sessionPassthrough = s.passthroughMode == "role_card",
                     globalPassthrough = s.passthroughMode == "global",
                     personalityMode = s.personalityMode,
@@ -256,9 +345,5 @@ class SettingsViewModel : ViewModel() {
     fun dismissBanner() {
         bannerJob?.cancel()
         _banner.value = BannerState(false, "", BannerType.Info)
-    }
-
-    companion object {
-        private const val TAG = "SettingsViewModel"
     }
 }

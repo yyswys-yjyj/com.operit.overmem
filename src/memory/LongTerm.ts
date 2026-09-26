@@ -65,7 +65,7 @@ export class LongTermMemory {
       const personalityText = await this.getPersonalityForScope(scopeType, scopeId);
       const systemPrompt = buildPersonaSystemPrompt(personalityText);
 
-      // ★ 叙事层 prompt
+      // 叙事层 prompt
       const userPrompt = `以下是你与用户一段时间内积累的**主题层**记忆。请以角色的身份，将它们整合成一段**叙事层**记忆。
 
 【叙事层的定义】

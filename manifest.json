@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "com.operit.overmem",
-  "version": "0.1.1-Alpha011260919(1011)",
+  "version": "0.2.0-Beta(2020)",
   "author": ["yyswys-yjyj"],
   "main": "dist/main.js",
   "display_name": {
@@ -14,11 +14,5 @@
   },
   "subpackages": [
   ],
-  "resources": [
-    {
-      "key": "overmem_apk",
-      "path": "resources/overmem_client/com.serveryyswys.overmem.apk",
-      "mime": "application/vnd.android.package-archive"
-    }
-  ]
+  "resources": []
 }

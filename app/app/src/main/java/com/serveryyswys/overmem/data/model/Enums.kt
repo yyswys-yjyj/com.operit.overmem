@@ -22,14 +22,25 @@ enum class MemoryLevel(val value: String) {
     }
 }
 
-enum class MemoryState(val value: String) {
-    NORMAL("normal"),
-    ACTIVE("active"),
-    TRASH("trash");
+enum class NodeType(val value: String) {
+    MESSAGE("message"),
+    BLOCK("block"),
+    SUMMARY("summary");
 
     companion object {
-        fun from(value: String): MemoryState =
-            values().firstOrNull { it.value == value } ?: NORMAL
+        fun from(value: String): NodeType =
+            values().firstOrNull { it.value == value } ?: MESSAGE
+    }
+}
+
+enum class EdgeType(val value: String) {
+    TIME("time"),
+    FOLD("fold"),
+    RECALL("recall");
+
+    companion object {
+        fun from(value: String): EdgeType =
+            values().firstOrNull { it.value == value } ?: TIME
     }
 }
 

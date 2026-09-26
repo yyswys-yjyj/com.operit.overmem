@@ -624,6 +624,7 @@ function renderClientCard(
   const cs = ctx.MaterialTheme.colorScheme;
   const children: ComposeNode[] = [];
 
+  // 标题
   children.push(ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
     ctx.UI.Icon({ name: 'smartphone', size: 18, tint: cs.primary }),
     ctx.UI.Spacer({ width: 8 }),
@@ -636,6 +637,7 @@ function renderClientCard(
   }));
   children.push(ctx.UI.Spacer({ height: 10 }));
 
+  // 已安装信息
   if (s.clientInstalled) {
     children.push(ctx.UI.Row({ verticalAlignment: 'center' }, [
       ctx.UI.Icon({ name: 'check_circle', size: 14, tint: cs.primary }),
@@ -666,14 +668,65 @@ function renderClientCard(
 
   children.push(ctx.UI.Spacer({ height: 10 }));
 
+  // 下载进度区域（当 clientInstalling && downloadActive 时显示）
+  if (s.clientInstalling && s.downloadActive) {
+    children.push(ctx.UI.Card({
+      elevation: 0,
+      containerColor: cs.surfaceVariant,
+      modifier: ctx.Modifier.fillMaxWidth().padding({ vertical: 8 }),
+      shape: { type: 'rounded', cornerRadius: 8 }
+    }, [
+      ctx.UI.Column({ padding: 12 }, [
+        // 进度百分比行
+        ctx.UI.Row({
+          horizontalArrangement: 'spaceBetween',
+          fillMaxWidth: true,
+          verticalAlignment: 'center'
+        }, [
+          ctx.UI.Text({ text: '下载中', fontSize: 13, fontWeight: 'bold' }),
+          ctx.UI.Text({
+            text: Math.round(s.downloadProgress * 100) + '%',
+            fontSize: 13, fontWeight: 'bold', color: cs.primary
+          })
+        ]),
+        ctx.UI.Spacer({ height: 6 }),
+
+        // 进度条
+        ctx.UI.LinearProgressIndicator({
+          progress: s.downloadProgress,
+          modifier: ctx.Modifier.fillMaxWidth().height(6)
+        }),
+
+        ctx.UI.Spacer({ height: 6 }),
+
+        // 已下载 / 总大小 / 速度 / ETA
+        ctx.UI.Row({
+          horizontalArrangement: 'spaceBetween',
+          fillMaxWidth: true
+        }, [
+          ctx.UI.Text({
+            text: s.downloadReceivedText || '',
+            fontSize: 11, color: cs.onSurfaceVariant
+          }),
+          ctx.UI.Text({
+            text: [s.downloadSpeedText, s.downloadEtaText].filter(t => t).join(' · '),
+            fontSize: 11, color: cs.onSurfaceVariant
+          })
+        ])
+      ])
+    ]));
+    children.push(ctx.UI.Spacer({ height: 8 }));
+  }
+
+  // 操作按钮
   const label = s.clientInstalling
-    ? '安装中…'
+    ? (s.downloadActive ? '下载中…' : '安装中…')
     : (s.clientInstalled ? (e.clientHasUpdate() ? '更新客户端' : '重新安装') : '安装客户端');
 
   children.push(ctx.UI.Row({ horizontalArrangement: 'spaceEvenly', fillMaxWidth: true }, [
     IconTextButton(ctx, {
       text: label,
-      icon: 'download',
+      icon: s.downloadActive ? 'cloud_download' : 'download',
       onClick: e.onInstallClient,
       enabled: !s.clientInstalling,
       iconSize: 16,
@@ -693,10 +746,22 @@ function renderClientCard(
     })
   ]));
 
+  // 状态文字
   if (s.clientStatus) {
     children.push(ctx.UI.Spacer({ height: 8 }));
     children.push(ctx.UI.Text({
-      text: s.clientStatus, fontSize: 11, color: cs.onSurfaceVariant
+      text: s.clientStatus,
+      fontSize: 11,
+      color: s.clientStatus.indexOf('失败') >= 0 ? cs.error : cs.onSurfaceVariant
+    }));
+  }
+
+  // 远端版本信息
+  if (s.remoteLatestVersion) {
+    children.push(ctx.UI.Spacer({ height: 4 }));
+    children.push(ctx.UI.Text({
+      text: '远端最新版本: v' + s.remoteLatestVersion,
+      fontSize: 11, color: cs.onSurfaceVariant
     }));
   }
 

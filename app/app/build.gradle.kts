@@ -16,8 +16,8 @@ android {
         applicationId = "com.serveryyswys.overmem"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1 //比较版本号
-        versionName = "0.1.1" //显示版本号
+        versionCode = 2 //比较版本号
+        versionName = "0.2.0" //显示版本号
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -1,29 +1,50 @@
 package com.serveryyswys.overmem.data.db
 
-import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import com.serveryyswys.overmem.data.model.*
 
 /**
- * 原生 SQLite DAO，镜像插件的 DatabaseManager。
- * 所有查询都是同步的，调用方负责放到 IO 线程。
+ * 原生 SQLite DAO，镜像 v4 插件的 NodeManager / EdgeManager。
  *
- * 数据库连接通过 OverMemDatabase.get() 单例获取；
- * 连接失败会抛 DatabaseException，由 UI 层统一处理。
- *
- * 注意：config 表的 key/value 是 SQLite 保留字，SQL 中需加双引号。
+ * 所有查询失败都会抛 [DatabaseException.QueryFailed]，由上层统一处理。
  */
 class MemoryDao {
 
     private val db: SQLiteDatabase
         get() = OverMemDatabase.get()
 
+    private val NODE_FIELDS =
+        "id, node_type, scope_type, scope_id, session_id, role, level, content, " +
+                "timestamp, created_at, updated_at, trashed_at, msg_id, seq, is_pending, arousal, " +
+                "recalled_count, last_recalled_at, meta"
+
+    /** 带表别名的字段列表，用于 JOIN 查询避免列名歧义 */
+    private val NODE_FIELDS_N =
+        "n.id, n.node_type, n.scope_type, n.scope_id, n.session_id, n.role, n.level, n.content, " +
+                "n.timestamp, n.created_at, n.updated_at, n.trashed_at, n.msg_id, n.seq, n.is_pending, " +
+                "n.arousal, n.recalled_count, n.last_recalled_at, n.meta"
+
+    private val EDGE_FIELDS =
+        "id, from_node, to_node, edge_type, weight, last_active_at, created_at"
+
+    // ============ 安全查询包装 ============
+
+    private inline fun <T> safeQuery(block: () -> T): T {
+        return try {
+            block()
+        } catch (e: DatabaseException) {
+            throw e
+        } catch (e: Exception) {
+            throw DatabaseException.QueryFailed(e.message ?: "unknown", e)
+        }
+    }
+
     // ============ 作用域 ============
 
-    fun getScope(sessionId: String, roleCardId: String): Pair<ScopeType, String> {
+    fun getScope(sessionId: String, roleCardId: String): Pair<ScopeType, String> = safeQuery {
         val config = getConfig()
-        return when {
+        when {
             config.globalPassthrough -> ScopeType.GLOBAL to "global"
             config.sessionPassthrough && roleCardId.isNotEmpty() -> ScopeType.ROLE_CARD to roleCardId
             else -> ScopeType.SESSION to sessionId
@@ -32,7 +53,7 @@ class MemoryDao {
 
     // ============ 会话元数据 ============
 
-    fun getAllSessionMeta(): List<SessionMeta> {
+    fun getAllSessionMeta(): List<SessionMeta> = safeQuery {
         val result = mutableListOf<SessionMeta>()
         db.rawQuery(
             "SELECT session_id, title, role_card_id, role_card_name, last_message_at, created_at, updated_at " +
@@ -40,233 +61,170 @@ class MemoryDao {
         ).use { c ->
             while (c.moveToNext()) result.add(c.toSessionMeta())
         }
-        return result
+        result
     }
 
-    fun getSessionMeta(sessionId: String): SessionMeta? {
+    fun getSessionMeta(sessionId: String): SessionMeta? = safeQuery {
         db.rawQuery(
             "SELECT session_id, title, role_card_id, role_card_name, last_message_at, created_at, updated_at " +
                     "FROM session_meta WHERE session_id = ?", arrayOf(sessionId)
         ).use { c ->
-            if (c.moveToFirst()) return c.toSessionMeta()
+            if (c.moveToFirst()) c.toSessionMeta() else null
         }
-        return null
     }
 
-    fun getOrCreateSessionMeta(
-        sessionId: String,
-        title: String? = null,
-        roleCardId: String? = null,
-        roleCardName: String? = null
-    ): SessionMeta {
-        getSessionMeta(sessionId)?.let { existing ->
-            var needUpdate = false
-            val updated = existing.copy(
-                title = if (!title.isNullOrEmpty() && title != existing.title) { needUpdate = true; title } else existing.title,
-                roleCardId = if (!roleCardId.isNullOrEmpty() && roleCardId != existing.roleCardId) { needUpdate = true; roleCardId } else existing.roleCardId,
-                roleCardName = if (!roleCardName.isNullOrEmpty()) roleCardName else existing.roleCardName
-            )
-            return updated
+    // ============ 节点查询 ============
+
+    fun getNodeById(id: Long): MemoryNode? = safeQuery {
+        db.rawQuery(
+            "SELECT $NODE_FIELDS FROM nodes WHERE id = ?", arrayOf(id.toString())
+        ).use { c ->
+            if (c.moveToFirst()) c.toMemoryNode() else null
         }
-        val now = System.currentTimeMillis()
-        val meta = SessionMeta(
-            sessionId = sessionId,
-            title = title ?: "未命名会话",
-            roleCardId = roleCardId ?: "",
-            roleCardName = roleCardName ?: "",
-            lastMessageAt = now,
-            createdAt = now,
-            updatedAt = now
-        )
-        db.insert("session_meta", null, ContentValues().apply {
-            put("session_id", meta.sessionId)
-            put("title", meta.title)
-            put("role_card_id", meta.roleCardId)
-            put("role_card_name", meta.roleCardName)
-            put("last_message_at", meta.lastMessageAt)
-            put("created_at", meta.createdAt)
-            put("updated_at", meta.updatedAt)
-        })
-        return meta
     }
 
-    // ============ 短期块 ============
+    fun getBlocks(scopeType: ScopeType, scopeId: String, limit: Int? = null): List<MemoryNode> =
+        listNodes(scopeType, scopeId, "block", "short", limit)
 
-    fun getShortBlocks(scopeType: ScopeType, scopeId: String, limit: Int? = null): List<ShortBlock> {
-        val sql = buildString {
-            append("SELECT id, scope_type, scope_id, content, timestamp, distance, segment_count, source_ids, session_id, created_at, updated_at ")
-            append("FROM short_blocks WHERE scope_type = ? AND scope_id = ? ORDER BY created_at DESC")
-            if (limit != null) append(" LIMIT $limit")
-        }
-        val result = mutableListOf<ShortBlock>()
-        db.rawQuery(sql, arrayOf(scopeType.value, scopeId)).use { c ->
-            while (c.moveToNext()) result.add(c.toShortBlock())
-        }
-        return result
+    fun getMidBlocks(scopeType: ScopeType, scopeId: String, limit: Int? = null): List<MemoryNode> =
+        listNodes(scopeType, scopeId, "summary", "mid", limit)
+
+    fun getLongBlocks(scopeType: ScopeType, scopeId: String, limit: Int? = null): List<MemoryNode> =
+        listNodes(scopeType, scopeId, "summary", "long", limit)
+
+    fun getPendingMessages(scopeType: ScopeType, scopeId: String): List<MemoryNode> = safeQuery {
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(
+            "SELECT $NODE_FIELDS FROM nodes " +
+                    "WHERE scope_type = ? AND scope_id = ? AND node_type = 'message' AND is_pending = 1 " +
+                    "ORDER BY seq ASC",
+            arrayOf(scopeType.value, scopeId)
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryNode()) }
+        result
     }
 
-    fun getShortBlockCount(scopeType: ScopeType, scopeId: String): Int =
-        countOf("short_blocks", scopeType, scopeId)
-
-    // ============ 中期块 ============
-
-    fun getMidBlocks(
-        scopeType: ScopeType,
-        scopeId: String,
-        limit: Int? = null,
-        state: MemoryState? = null
-    ): List<MidBlock> {
-        val (sql, args) = buildBlockQuery(
-            table = "mid_blocks",
-            columns = "id, scope_type, scope_id, content, timestamp, distance, state, source_block_ids, source_count, session_id, created_at, updated_at",
-            scopeType = scopeType, scopeId = scopeId, limit = limit, state = state
-        )
-        val result = mutableListOf<MidBlock>()
-        db.rawQuery(sql, args).use { c ->
-            while (c.moveToNext()) result.add(c.toMidBlock())
-        }
-        return result
+    fun getUnfoldedBlocks(scopeType: ScopeType, scopeId: String): List<MemoryNode> = safeQuery {
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(
+            "SELECT $NODE_FIELDS_N FROM nodes n " +
+                    "WHERE n.scope_type = ? AND n.scope_id = ? " +
+                    "AND n.node_type = 'block' AND n.trashed_at IS NULL " +
+                    "AND NOT EXISTS (" +
+                    "  SELECT 1 FROM edges e WHERE e.from_node = n.id AND e.edge_type = 'fold' " +
+                    "  AND e.to_node IN (SELECT id FROM nodes WHERE node_type = 'summary' AND level = 'mid')" +
+                    ") ORDER BY n.seq ASC",
+            arrayOf(scopeType.value, scopeId)
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryNode()) }
+        result
     }
+
+    fun getUnfoldedMidBlocks(scopeType: ScopeType, scopeId: String): List<MemoryNode> = safeQuery {
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(
+            "SELECT $NODE_FIELDS_N FROM nodes n " +
+                    "WHERE n.scope_type = ? AND n.scope_id = ? " +
+                    "AND n.node_type = 'summary' AND n.level = 'mid' AND n.trashed_at IS NULL " +
+                    "AND NOT EXISTS (" +
+                    "  SELECT 1 FROM edges e WHERE e.from_node = n.id AND e.edge_type = 'fold' " +
+                    "  AND e.to_node IN (SELECT id FROM nodes WHERE node_type = 'summary' AND level = 'long')" +
+                    ") ORDER BY n.seq ASC",
+            arrayOf(scopeType.value, scopeId)
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryNode()) }
+        result
+    }
+
+    /** 事件块的源 message（通过 fold 边） */
+    fun getMessagesByBlock(blockId: Long): List<MemoryNode> = safeQuery {
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(
+            "SELECT $NODE_FIELDS_N FROM nodes n " +
+                    "JOIN edges e ON e.to_node = n.id " +
+                    "WHERE e.from_node = ? AND e.edge_type = 'fold' " +
+                    "AND n.node_type = 'message' " +
+                    "ORDER BY n.timestamp ASC",
+            arrayOf(blockId.toString())
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryNode()) }
+        result
+    }
+
+    /** 主题/叙事块的源块 */
+    fun getChildrenBySummary(summaryId: Long): List<MemoryNode> = safeQuery {
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(
+            "SELECT $NODE_FIELDS_N FROM nodes n " +
+                    "JOIN edges e ON e.to_node = n.id " +
+                    "WHERE e.from_node = ? AND e.edge_type = 'fold' " +
+                    "ORDER BY n.seq ASC",
+            arrayOf(summaryId.toString())
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryNode()) }
+        result
+    }
+
+    // ============ 计数 ============
+
+    fun getMessageCount(scopeType: ScopeType, scopeId: String): Int =
+        countNodes(scopeType, scopeId, "message", "")
+
+    fun getBlockCount(scopeType: ScopeType, scopeId: String): Int =
+        countNodes(scopeType, scopeId, "block", "short")
 
     fun getMidBlockCount(scopeType: ScopeType, scopeId: String): Int =
-        countOf("mid_blocks", scopeType, scopeId)
-
-    // ============ 长期块 ============
-
-    fun getLongBlocks(
-        scopeType: ScopeType,
-        scopeId: String,
-        limit: Int? = null,
-        state: MemoryState? = null
-    ): List<LongBlock> {
-        val (sql, args) = buildBlockQuery(
-            table = "long_blocks",
-            columns = "id, scope_type, scope_id, content, timestamp, distance, state, source_mid_ids, source_count, session_id, created_at, updated_at",
-            scopeType = scopeType, scopeId = scopeId, limit = limit, state = state
-        )
-        val result = mutableListOf<LongBlock>()
-        db.rawQuery(sql, args).use { c ->
-            while (c.moveToNext()) result.add(c.toLongBlock())
-        }
-        return result
-    }
+        countNodes(scopeType, scopeId, "summary", "mid")
 
     fun getLongBlockCount(scopeType: ScopeType, scopeId: String): Int =
-        countOf("long_blocks", scopeType, scopeId)
+        countNodes(scopeType, scopeId, "summary", "long")
 
-    // ============ 单块查询 ============
+    // ============ 链元数据 ============
 
-    fun getShortBlockById(id: Long): ShortBlock? {
+    fun getChainMeta(scopeType: ScopeType, scopeId: String): ChainMeta? = safeQuery {
         db.rawQuery(
-            "SELECT id, scope_type, scope_id, content, timestamp, distance, segment_count, source_ids, session_id, created_at, updated_at " +
-                    "FROM short_blocks WHERE id = ?", arrayOf(id.toString())
-        ).use { c ->
-            if (c.moveToFirst()) return c.toShortBlock()
-        }
-        return null
-    }
-
-    fun getMidBlockById(id: Long): MidBlock? {
-        db.rawQuery(
-            "SELECT id, scope_type, scope_id, content, timestamp, distance, state, source_block_ids, source_count, session_id, created_at, updated_at " +
-                    "FROM mid_blocks WHERE id = ?", arrayOf(id.toString())
-        ).use { c ->
-            if (c.moveToFirst()) return c.toMidBlock()
-        }
-        return null
-    }
-
-    fun getLongBlockById(id: Long): LongBlock? {
-        db.rawQuery(
-            "SELECT id, scope_type, scope_id, content, timestamp, distance, state, source_mid_ids, source_count, session_id, created_at, updated_at " +
-                    "FROM long_blocks WHERE id = ?", arrayOf(id.toString())
-        ).use { c ->
-            if (c.moveToFirst()) return c.toLongBlock()
-        }
-        return null
-    }
-
-    // ============ 段 ============
-
-    fun getSegmentsByIds(ids: List<Long>): List<ShortSegment> {
-        if (ids.isEmpty()) return emptyList()
-        val placeholders = ids.joinToString(",") { "?" }
-        val result = mutableListOf<ShortSegment>()
-        db.rawQuery(
-            "SELECT id, scope_type, scope_id, session_id, role, content, timestamp, msg_id, block_id, created_at " +
-                    "FROM short_segments WHERE id IN ($placeholders) ORDER BY timestamp ASC",
-            ids.map { it.toString() }.toTypedArray()
-        ).use { c ->
-            while (c.moveToNext()) result.add(c.toShortSegment())
-        }
-        return result
-    }
-
-    fun getSegmentById(id: Long): ShortSegment? {
-        db.rawQuery(
-            "SELECT id, scope_type, scope_id, session_id, role, content, timestamp, msg_id, block_id, created_at " +
-                    "FROM short_segments WHERE id = ?", arrayOf(id.toString())
-        ).use { c ->
-            if (c.moveToFirst()) return c.toShortSegment()
-        }
-        return null
-    }
-
-    // ============ 计数器 ============
-
-    fun loadCounters(scopeType: ScopeType, scopeId: String): Counters {
-        db.rawQuery(
-            "SELECT segment_count, short_block_count, mid_block_count, long_block_count " +
-                    "FROM counters WHERE scope_type = ? AND scope_id = ?",
+            "SELECT scope_type, scope_id, head_id, tail_id, head_seq, message_count, updated_at " +
+                    "FROM chain_meta WHERE scope_type = ? AND scope_id = ?",
             arrayOf(scopeType.value, scopeId)
         ).use { c ->
             if (c.moveToFirst()) {
-                return Counters(
-                    segmentCount = c.getInt(0),
-                    shortBlockCount = c.getInt(1),
-                    midBlockCount = c.getInt(2),
-                    longBlockCount = c.getInt(3)
+                ChainMeta(
+                    scopeType = ScopeType.from(c.getString(0)),
+                    scopeId = c.getString(1),
+                    headId = c.getLong(2),
+                    tailId = c.getLong(3),
+                    headSeq = c.getInt(4),
+                    messageCount = c.getInt(5),
+                    updatedAt = c.getLong(6)
                 )
-            }
+            } else null
         }
-        return Counters()
     }
 
-    // ============ 统计 ============
+    // ============ 边 ============
 
-    fun getStats(scopeType: ScopeType, scopeId: String): BlockStats {
-        val short = getShortBlockCount(scopeType, scopeId)
-        val mid = getMidBlockCount(scopeType, scopeId)
-        val long = getLongBlockCount(scopeType, scopeId)
-        val active = countActive(scopeType, scopeId)
-        val seg = countOf("short_segments", scopeType, scopeId)
-        return BlockStats(short, mid, long, active, seg)
+    fun getOutgoingEdges(nodeId: Long): List<MemoryEdge> = safeQuery {
+        queryEdges("from_node = ?", arrayOf(nodeId.toString()))
     }
 
-    private fun countActive(scopeType: ScopeType, scopeId: String): Int {
+    fun getIncomingEdges(nodeId: Long): List<MemoryEdge> = safeQuery {
+        queryEdges("to_node = ?", arrayOf(nodeId.toString()))
+    }
+
+    fun getEdgeCountByType(type: EdgeType): Int = safeQuery {
         db.rawQuery(
-            "SELECT (SELECT COUNT(*) FROM mid_blocks WHERE scope_type=? AND scope_id=? AND state='active') + " +
-                    "(SELECT COUNT(*) FROM long_blocks WHERE scope_type=? AND scope_id=? AND state='active')",
-            arrayOf(scopeType.value, scopeId, scopeType.value, scopeId)
-        ).use { c -> if (c.moveToFirst()) return c.getInt(0) }
-        return 0
+            "SELECT COUNT(*) FROM edges WHERE edge_type = ?",
+            arrayOf(type.value)
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
     }
 
     // ============ 配置 ============
 
-    fun getConfig(): OverMemConfig {
+    fun getConfig(): OverMemConfig = safeQuery {
         db.rawQuery(
             "SELECT value FROM config WHERE \"key\" = ?",
             arrayOf("overmem_config")
         ).use { c ->
-            if (c.moveToFirst()) {
-                return ConfigCodec.decode(c.getString(0))
-            }
+            if (c.moveToFirst()) ConfigCodec.decode(c.getString(0)) else OverMemConfig()
         }
-        return OverMemConfig()
     }
 
-    fun saveConfig(config: OverMemConfig) {
+    fun saveConfig(config: OverMemConfig): Unit = safeQuery {
         db.execSQL(
             "INSERT OR REPLACE INTO config (\"key\", \"value\", updated_at) VALUES (?, ?, ?)",
             arrayOf<Any>("overmem_config", ConfigCodec.encode(config), System.currentTimeMillis())
@@ -275,73 +233,94 @@ class MemoryDao {
 
     // ============ 删除 ============
 
-    fun deleteShortBlock(blockId: Long) {
-        db.delete("short_segments", "block_id = ?", arrayOf(blockId.toString()))
-        db.delete("short_blocks", "id = ?", arrayOf(blockId.toString()))
-    }
-
-    fun deleteMidBlock(blockId: Long) {
-        db.delete("mid_blocks", "id = ?", arrayOf(blockId.toString()))
-    }
-
-    fun deleteLongBlock(blockId: Long) {
-        db.delete("long_blocks", "id = ?", arrayOf(blockId.toString()))
+    fun deleteNode(id: Long): Unit = safeQuery {
+        db.delete("edges", "from_node = ? OR to_node = ?", arrayOf(id.toString(), id.toString()))
+        db.delete("nodes", "id = ?", arrayOf(id.toString()))
     }
 
     // ============ 更新 ============
 
-    fun updateShortBlockContent(blockId: Long, content: String) {
+    fun updateNodeContent(id: Long, content: String): Unit = safeQuery {
         db.execSQL(
-            "UPDATE short_blocks SET content = ?, updated_at = ? WHERE id = ?",
-            arrayOf<Any>(content, System.currentTimeMillis(), blockId)
+            "UPDATE nodes SET content = ?, updated_at = ? WHERE id = ?",
+            arrayOf<Any>(content, System.currentTimeMillis(), id)
         )
     }
 
-    fun updateMidBlockContent(blockId: Long, content: String) {
-        db.execSQL(
-            "UPDATE mid_blocks SET content = ?, updated_at = ? WHERE id = ?",
-            arrayOf<Any>(content, System.currentTimeMillis(), blockId)
-        )
+    // ============ 统计 ============
+
+    fun getStats(scopeType: ScopeType, scopeId: String): BlockStats = safeQuery {
+        val messages = getMessageCount(scopeType, scopeId)
+        val blocks = getBlockCount(scopeType, scopeId)
+        val mid = getMidBlockCount(scopeType, scopeId)
+        val long = getLongBlockCount(scopeType, scopeId)
+
+        val since = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+        val active = db.rawQuery(
+            "SELECT COUNT(DISTINCT n.id) FROM nodes n " +
+                    "JOIN edges e ON (e.from_node = n.id OR e.to_node = n.id) " +
+                    "WHERE n.scope_type = ? AND n.scope_id = ? " +
+                    "AND n.node_type IN ('block', 'summary') " +
+                    "AND e.edge_type IN ('time', 'recall') " +
+                    "AND e.last_active_at >= ?",
+            arrayOf(scopeType.value, scopeId, since.toString())
+        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+        BlockStats(messages, blocks, mid, long, active)
     }
 
-    fun updateLongBlockContent(blockId: Long, content: String) {
-        db.execSQL(
-            "UPDATE long_blocks SET content = ?, updated_at = ? WHERE id = ?",
-            arrayOf<Any>(content, System.currentTimeMillis(), blockId)
-        )
-    }
+    // ============ 内部辅助 ============
 
-    fun updateSegmentContent(segId: Long, content: String) {
-        db.execSQL(
-            "UPDATE short_segments SET content = ? WHERE id = ?",
-            arrayOf<Any>(content, segId)
-        )
-    }
-
-    // ============ 辅助 ============
-
-    private fun countOf(table: String, scopeType: ScopeType, scopeId: String): Int {
-        db.rawQuery(
-            "SELECT COUNT(*) FROM $table WHERE scope_type = ? AND scope_id = ?",
-            arrayOf(scopeType.value, scopeId)
-        ).use { c -> if (c.moveToFirst()) return c.getInt(0) }
-        return 0
-    }
-
-    private fun buildBlockQuery(
-        table: String, columns: String,
+    private fun listNodes(
         scopeType: ScopeType, scopeId: String,
-        limit: Int?, state: MemoryState?
-    ): Pair<String, Array<String>> {
-        val args = mutableListOf(scopeType.value, scopeId)
+        nodeType: String, level: String,
+        limit: Int?
+    ): List<MemoryNode> = safeQuery {
         val sql = buildString {
-            append("SELECT $columns FROM $table WHERE scope_type = ? AND scope_id = ?")
-            if (state != null) { append(" AND state = ?"); args.add(state.value) }
-            append(" ORDER BY created_at DESC")
+            append("SELECT $NODE_FIELDS FROM nodes ")
+            append("WHERE scope_type = ? AND scope_id = ? AND node_type = ? ")
+            append("AND trashed_at IS NULL ")
+            if (level.isNotEmpty()) append("AND level = ? ")
+            append("ORDER BY seq DESC")
             if (limit != null) append(" LIMIT $limit")
         }
-        return sql to args.toTypedArray()
+        val args = mutableListOf(scopeType.value, scopeId, nodeType)
+        if (level.isNotEmpty()) args.add(level)
+
+        val result = mutableListOf<MemoryNode>()
+        db.rawQuery(sql, args.toTypedArray()).use { c ->
+            while (c.moveToNext()) result.add(c.toMemoryNode())
+        }
+        result
     }
+
+    private fun countNodes(
+        scopeType: ScopeType, scopeId: String,
+        nodeType: String, level: String
+    ): Int = safeQuery {
+        val sql = buildString {
+            append("SELECT COUNT(*) FROM nodes ")
+            append("WHERE scope_type = ? AND scope_id = ? AND node_type = ? ")
+            append("AND trashed_at IS NULL")
+            if (level.isNotEmpty()) append(" AND level = ?")
+        }
+        val args = mutableListOf(scopeType.value, scopeId, nodeType)
+        if (level.isNotEmpty()) args.add(level)
+
+        db.rawQuery(sql, args.toTypedArray()).use { c ->
+            if (c.moveToFirst()) c.getInt(0) else 0
+        }
+    }
+
+    private fun queryEdges(where: String, args: Array<String>): List<MemoryEdge> {
+        val result = mutableListOf<MemoryEdge>()
+        db.rawQuery(
+            "SELECT $EDGE_FIELDS FROM edges WHERE $where", args
+        ).use { c -> while (c.moveToNext()) result.add(c.toMemoryEdge()) }
+        return result
+    }
+
+    // ============ Cursor 映射 ============
 
     private fun Cursor.toSessionMeta() = SessionMeta(
         sessionId = getString(0),
@@ -353,60 +332,35 @@ class MemoryDao {
         updatedAt = getLong(6)
     )
 
-    private fun Cursor.toShortBlock() = ShortBlock(
+    private fun Cursor.toMemoryNode() = MemoryNode(
         id = getLong(0),
-        scopeType = ScopeType.from(getString(1)),
-        scopeId = getString(2),
-        content = getString(3),
-        timestamp = getString(4),
-        distance = getDouble(5),
-        segmentCount = getInt(6),
-        sourceIds = getString(7) ?: "",
-        sessionId = getString(8),
+        nodeType = NodeType.from(getString(1)),
+        scopeType = ScopeType.from(getString(2)),
+        scopeId = getString(3),
+        sessionId = getString(4),
+        role = getString(5) ?: "",
+        level = getString(6) ?: "",
+        content = getString(7),
+        timestamp = getLong(8),
         createdAt = getLong(9),
-        updatedAt = getLong(10)
+        updatedAt = getLong(10),
+        trashedAt = if (isNull(11)) null else getLong(11),
+        msgId = getString(12) ?: "",
+        seq = getInt(13),
+        isPending = getInt(14) == 1,
+        arousal = getDouble(15),
+        recalledCount = getInt(16),
+        lastRecalledAt = getLong(17),
+        meta = NodeMeta.parse(getString(18))
     )
 
-    private fun Cursor.toMidBlock() = MidBlock(
+    private fun Cursor.toMemoryEdge() = MemoryEdge(
         id = getLong(0),
-        scopeType = ScopeType.from(getString(1)),
-        scopeId = getString(2),
-        content = getString(3),
-        timestamp = getString(4),
-        distance = getDouble(5),
-        state = MemoryState.from(getString(6) ?: "normal"),
-        sourceBlockIds = getString(7) ?: "",
-        sourceCount = getInt(8),
-        sessionId = getString(9),
-        createdAt = getLong(10),
-        updatedAt = getLong(11)
-    )
-
-    private fun Cursor.toLongBlock() = LongBlock(
-        id = getLong(0),
-        scopeType = ScopeType.from(getString(1)),
-        scopeId = getString(2),
-        content = getString(3),
-        timestamp = getString(4),
-        distance = getDouble(5),
-        state = MemoryState.from(getString(6) ?: "normal"),
-        sourceMidIds = getString(7) ?: "",
-        sourceCount = getInt(8),
-        sessionId = getString(9),
-        createdAt = getLong(10),
-        updatedAt = getLong(11)
-    )
-
-    private fun Cursor.toShortSegment() = ShortSegment(
-        id = getLong(0),
-        scopeType = ScopeType.from(getString(1)),
-        scopeId = getString(2),
-        sessionId = getString(3),
-        role = Role.from(getString(4)),
-        content = getString(5),
-        timestamp = getLong(6),
-        msgId = getString(7) ?: "",
-        blockId = if (isNull(8)) null else getLong(8),
-        createdAt = getLong(9)
+        fromNode = getLong(1),
+        toNode = getLong(2),
+        edgeType = EdgeType.from(getString(3)),
+        weight = getDouble(4),
+        lastActiveAt = getLong(5),
+        createdAt = getLong(6)
     )
 }

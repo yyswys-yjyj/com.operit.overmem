@@ -2,11 +2,12 @@ package com.serveryyswys.overmem.ui.features.memoryhub
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.serveryyswys.overmem.data.db.DatabaseException
 import com.serveryyswys.overmem.data.db.MemoryDao
 import com.serveryyswys.overmem.data.model.MemoryLevel
-import com.serveryyswys.overmem.data.model.MemoryState
+import com.serveryyswys.overmem.data.model.MemoryNode
+import com.serveryyswys.overmem.data.model.NodeMeta
 import com.serveryyswys.overmem.data.model.Role
-import com.serveryyswys.overmem.data.model.ShortSegment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,12 +19,15 @@ data class MemoryItem(
     val level: MemoryLevel,
     val id: Long,
     val content: String,
-    val timestamp: String,
-    val distance: Double,
-    val state: MemoryState,
+    val timestamp: Long,
+    val state: String,
+    val trashed: Boolean,
     val sourceCount: Int,
     val sessionId: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val recalledCount: Int = 0,
+    val arousal: Double = 0.0,
+    val meta: NodeMeta? = null
 )
 
 data class SessionItem(
@@ -46,7 +50,7 @@ data class MemoryHubState(
 
 data class MemoryDetailState(
     val item: MemoryItem,
-    val segments: List<ShortSegment> = emptyList()
+    val children: List<MemoryNode> = emptyList()
 )
 
 data class MemoryEditState(
@@ -54,8 +58,8 @@ data class MemoryEditState(
     val userText: String = "",
     val assistantText: String = "",
     val singleText: String = "",
-    val userSegmentId: Long? = null,
-    val assistantSegmentId: Long? = null
+    val userNodeId: Long? = null,
+    val assistantNodeId: Long? = null
 )
 
 class MemoryHubViewModel : ViewModel() {
@@ -68,8 +72,14 @@ class MemoryHubViewModel : ViewModel() {
     private val _detail = MutableStateFlow<MemoryDetailState?>(null)
     val detail: StateFlow<MemoryDetailState?> = _detail.asStateFlow()
 
+    private val _detailError = MutableStateFlow<String?>(null)
+    val detailError: StateFlow<String?> = _detailError.asStateFlow()
+
     private val _edit = MutableStateFlow<MemoryEditState?>(null)
     val edit: StateFlow<MemoryEditState?> = _edit.asStateFlow()
+
+    private val _editError = MutableStateFlow<String?>(null)
+    val editError: StateFlow<String?> = _editError.asStateFlow()
 
     init { refresh() }
 
@@ -86,7 +96,7 @@ class MemoryHubViewModel : ViewModel() {
                             title = s.title.ifEmpty { "未命名会话" },
                             roleCardName = s.roleCardName.ifEmpty { "未绑定" },
                             lastMessageAt = s.lastMessageAt,
-                            shortCount = dao.getShortBlockCount(st, sid),
+                            shortCount = dao.getBlockCount(st, sid),
                             midCount = dao.getMidBlockCount(st, sid),
                             longCount = dao.getLongBlockCount(st, sid)
                         )
@@ -96,23 +106,14 @@ class MemoryHubViewModel : ViewModel() {
                     sessions.forEach { s ->
                         val (st, sid) = dao.getScope(s.sessionId, s.roleCardId)
 
-                        dao.getShortBlocks(st, sid).forEach { b ->
-                            all += MemoryItem(
-                                MemoryLevel.SHORT, b.id, b.content, b.timestamp, b.distance,
-                                MemoryState.NORMAL, b.segmentCount, b.sessionId, b.createdAt
-                            )
+                        dao.getBlocks(st, sid).forEach { node ->
+                            all += node.toItem(MemoryLevel.SHORT)
                         }
-                        dao.getMidBlocks(st, sid).forEach { b ->
-                            all += MemoryItem(
-                                MemoryLevel.MID, b.id, b.content, b.timestamp, b.distance,
-                                b.state, b.sourceCount, b.sessionId, b.createdAt
-                            )
+                        dao.getMidBlocks(st, sid).forEach { node ->
+                            all += node.toItem(MemoryLevel.MID)
                         }
-                        dao.getLongBlocks(st, sid).forEach { b ->
-                            all += MemoryItem(
-                                MemoryLevel.LONG, b.id, b.content, b.timestamp, b.distance,
-                                b.state, b.sourceCount, b.sessionId, b.createdAt
-                            )
+                        dao.getLongBlocks(st, sid).forEach { node ->
+                            all += node.toItem(MemoryLevel.LONG)
                         }
                     }
                     all.sortByDescending { it.createdAt }
@@ -129,7 +130,10 @@ class MemoryHubViewModel : ViewModel() {
                     )
                 },
                 onFailure = { e ->
-                    _state.value = _state.value.copy(loading = false, error = e.message ?: "加载失败")
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        error = friendlyError(e)
+                    )
                 }
             )
         }
@@ -141,97 +145,152 @@ class MemoryHubViewModel : ViewModel() {
 
     fun loadDetail(level: MemoryLevel, id: Long) {
         viewModelScope.launch {
+            _detailError.value = null
+            _detail.value = null
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val item = loadItem(level, id) ?: error("记忆块不存在")
-                    val segments = if (level == MemoryLevel.SHORT) {
-                        val block = dao.getShortBlockById(id)!!
-                        val idList = block.sourceIds.split(",").filter { it.isNotBlank() }.mapNotNull { it.toLongOrNull() }
-                        dao.getSegmentsByIds(idList)
-                    } else emptyList()
-                    MemoryDetailState(item, segments)
+                    val node = dao.getNodeById(id) ?: error("记忆节点不存在: id=$id")
+                    val item = node.toItem(level)
+                    val children = if (level == MemoryLevel.SHORT) {
+                        dao.getMessagesByBlock(id)
+                    } else {
+                        dao.getChildrenBySummary(id)
+                    }
+                    MemoryDetailState(item, children)
                 }
             }
             result.onSuccess { _detail.value = it }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _detailError.value = friendlyError(it) }
         }
     }
 
-    fun clearDetail() { _detail.value = null }
+    fun clearDetail() {
+        _detail.value = null
+        _detailError.value = null
+    }
 
     fun loadEdit(level: MemoryLevel, id: Long) {
         viewModelScope.launch {
+            _editError.value = null
+            _edit.value = null
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val item = loadItem(level, id) ?: error("记忆块不存在")
+                    val node = dao.getNodeById(id) ?: error("记忆节点不存在: id=$id")
+                    val item = node.toItem(level)
                     if (level == MemoryLevel.SHORT) {
-                        val block = dao.getShortBlockById(id)!!
-                        val idList = block.sourceIds.split(",").filter { it.isNotBlank() }.mapNotNull { it.toLongOrNull() }
-                        val segs = dao.getSegmentsByIds(idList)
-                        val u = segs.firstOrNull { it.role == Role.USER }
-                        val a = segs.firstOrNull { it.role == Role.ASSISTANT }
-                        MemoryEditState(item, u?.content ?: "", a?.content ?: "", "", u?.id, a?.id)
+                        val msgs = dao.getMessagesByBlock(id)
+                        val u = msgs.firstOrNull { it.role == Role.USER.value }
+                        val a = msgs.firstOrNull { it.role == Role.ASSISTANT.value }
+                        MemoryEditState(
+                            item = item,
+                            userText = u?.content ?: "",
+                            assistantText = a?.content ?: "",
+                            userNodeId = u?.id,
+                            assistantNodeId = a?.id
+                        )
                     } else {
-                        MemoryEditState(item, singleText = item.content)
+                        MemoryEditState(item = item, singleText = node.content)
                     }
                 }
             }
             result.onSuccess { _edit.value = it }
-                .onFailure { _state.value = _state.value.copy(error = it.message) }
+                .onFailure { _editError.value = friendlyError(it) }
         }
     }
 
     fun updateEditUserText(t: String) { _edit.value = _edit.value?.copy(userText = t) }
     fun updateEditAssistantText(t: String) { _edit.value = _edit.value?.copy(assistantText = t) }
     fun updateEditSingleText(t: String) { _edit.value = _edit.value?.copy(singleText = t) }
-    fun clearEdit() { _edit.value = null }
+
+    fun clearEdit() {
+        _edit.value = null
+        _editError.value = null
+    }
 
     fun saveEdit(onDone: () -> Unit) {
         val e = _edit.value ?: return
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                when (e.item.level) {
-                    MemoryLevel.SHORT -> {
-                        e.userSegmentId?.let { dao.updateSegmentContent(it, e.userText) }
-                        e.assistantSegmentId?.let { dao.updateSegmentContent(it, e.assistantText) }
-                        dao.updateShortBlockContent(e.item.id, "用户: ${e.userText}\nAI: ${e.assistantText}")
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    when (e.item.level) {
+                        MemoryLevel.SHORT -> {
+                            e.userNodeId?.let { dao.updateNodeContent(it, e.userText) }
+                            e.assistantNodeId?.let { dao.updateNodeContent(it, e.assistantText) }
+                            dao.updateNodeContent(e.item.id, "用户: ${e.userText}\nAI: ${e.assistantText}")
+                        }
+                        else -> dao.updateNodeContent(e.item.id, e.singleText)
                     }
-                    MemoryLevel.MID  -> dao.updateMidBlockContent(e.item.id, e.singleText)
-                    MemoryLevel.LONG -> dao.updateLongBlockContent(e.item.id, e.singleText)
                 }
             }
-            _edit.value = null
-            refresh()
-            onDone()
+            result.fold(
+                onSuccess = {
+                    _edit.value = null
+                    refresh()
+                    onDone()
+                },
+                onFailure = { _editError.value = friendlyError(it) }
+            )
         }
     }
 
     fun deleteMemory(level: MemoryLevel, id: Long, onDone: () -> Unit) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                when (level) {
-                    MemoryLevel.SHORT -> dao.deleteShortBlock(id)
-                    MemoryLevel.MID   -> dao.deleteMidBlock(id)
-                    MemoryLevel.LONG  -> dao.deleteLongBlock(id)
-                }
+            val result = withContext(Dispatchers.IO) {
+                runCatching { dao.deleteNode(id) }
             }
-            refresh()
-            onDone()
+            result.fold(
+                onSuccess = {
+                    refresh()
+                    onDone()
+                },
+                onFailure = { _state.value = _state.value.copy(error = friendlyError(it)) }
+            )
         }
     }
 
-    private fun loadItem(level: MemoryLevel, id: Long): MemoryItem? = when (level) {
-        MemoryLevel.SHORT -> dao.getShortBlockById(id)?.let {
-            MemoryItem(MemoryLevel.SHORT, it.id, it.content, it.timestamp, it.distance,
-                MemoryState.NORMAL, it.segmentCount, it.sessionId, it.createdAt)
+    // ============ 错误美化 ============
+
+    private fun friendlyError(e: Throwable): String {
+        return when (e) {
+            is DatabaseException -> e.message ?: "数据库错误"
+            else -> {
+                val msg = e.message ?: "未知错误"
+                if (msg.contains("ambiguous", ignoreCase = true)) {
+                    "查询失败：列名歧义（这是开发错误，请反馈）\n$msg"
+                } else if (msg.contains("no such table", ignoreCase = true)) {
+                    "数据库表不存在，插件可能尚未初始化\n$msg"
+                } else if (msg.contains("no such column", ignoreCase = true)) {
+                    "数据库列不存在，请升级插件\n$msg"
+                } else {
+                    msg
+                }
+            }
         }
-        MemoryLevel.MID -> dao.getMidBlockById(id)?.let {
-            MemoryItem(MemoryLevel.MID, it.id, it.content, it.timestamp, it.distance,
-                it.state, it.sourceCount, it.sessionId, it.createdAt)
-        }
-        MemoryLevel.LONG -> dao.getLongBlockById(id)?.let {
-            MemoryItem(MemoryLevel.LONG, it.id, it.content, it.timestamp, it.distance,
-                it.state, it.sourceCount, it.sessionId, it.createdAt)
-        }
+    }
+
+    // ============ 内部辅助 ============
+
+    private fun MemoryNode.toItem(level: MemoryLevel): MemoryItem {
+        val trashed = trashedAt != null
+        val state = if (trashed) "trash" else "normal"
+
+        val childCount = try {
+            dao.getOutgoingEdges(this.id).count { it.edgeType.value == "fold" }
+        } catch (_: Exception) { 0 }
+
+        return MemoryItem(
+            level = level,
+            id = this.id,
+            content = this.content,
+            timestamp = this.timestamp,
+            state = state,
+            trashed = trashed,
+            sourceCount = childCount,
+            sessionId = this.sessionId,
+            createdAt = this.createdAt,
+            recalledCount = this.recalledCount,
+            arousal = this.arousal,
+            meta = this.meta
+        )
     }
 }

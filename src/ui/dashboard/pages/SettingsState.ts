@@ -3,11 +3,13 @@
 
 import { DashboardState } from '../DashboardState.js';
 import { DatabaseManager } from '../../../db/DatabaseManager.js';
-import { NodeManager } from '../../../db/NodeManager.js';
 import { ShortTermMemory } from '../../../memory/ShortTerm.js';
 import { PersonalityHelper } from '../../../utils/PersonalityHelper.js';
 import { loadSettings, resetConfig } from '../../../utils/ConfigManager.js';
-import { logInfo, logError } from '../../../utils/Logger.js';
+import { downloadFile } from '../../../utils/Downloader.js';
+import { httpGetWithTimeout } from '../../../utils/HttpHelper.js';
+import { formatBytes, formatEta, formatSpeed, buildApkUrl } from '../../../utils/Formatter.js';
+import { logInfo, logError, logWarn } from '../../../utils/Logger.js';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 const LOG_FILE_PATH = "/storage/emulated/0/Download/Operit/overmem/log.txt";
@@ -15,8 +17,10 @@ const LOG_FILE_PATH = "/storage/emulated/0/Download/Operit/overmem/log.txt";
 export const CLIENT_PACKAGE_NAME = 'com.serveryyswys.overmem';
 export const CLIENT_VERSION_NAME = '0.1.1';
 export const CLIENT_VERSION_CODE = 1;
-export const CLIENT_APK_RESOURCE_KEY = 'overmem_apk';
 export const CLIENT_APK_FILENAME = 'com.serveryyswys.overmem.apk';
+
+const CLIENT_API_URL = 'https://www.serveryyswys.top/download/api/OperitToolpkgOvermem';
+const CLIENT_DOWNLOAD_HOST = 'https://www.serveryyswys.top';
 
 export interface SettingsUiState {
   shortThreshold: number;
@@ -39,28 +43,43 @@ export interface SettingsUiState {
   pendingInfoText: string;
   aiBasicUrl: string;
   aiModel: string;
+
   clientInstalled: boolean;
   clientVersionName: string;
   clientVersionCode: number;
   clientInstalling: boolean;
   clientStatus: string;
+
+  downloadActive: boolean;
+  downloadProgress: number;
+  downloadSpeedText: string;
+  downloadEtaText: string;
+  downloadReceivedText: string;
+
+  remoteLatestVersion: string;
 }
 
 export class SettingsStateHolder {
   private dashboard: DashboardState;
+
   private state: SettingsUiState = {
     shortThreshold: 20, midThreshold: 40, longThreshold: 20,
     injectTopN: 5, activeRatio: 0.7, recallEnabled: true,
-    noiseTemperature: 0.3,
-    synapticFailureEnabled: true,
+    noiseTemperature: 0.3, synapticFailureEnabled: true,
     passthroughMode: 'none',
     personalityMode: 'auto', personalityCardId: '', personalityName: '',
     personalityCustomText: '', availableCards: [], isLoadingCards: false,
     debugMode: false, logSizeText: '0 B', pendingInfoText: '空',
     aiBasicUrl: '', aiModel: '',
     clientInstalled: false, clientVersionName: '', clientVersionCode: 0,
-    clientInstalling: false, clientStatus: ''
+    clientInstalling: false, clientStatus: '',
+    downloadActive: false, downloadProgress: 0,
+    downloadSpeedText: '', downloadEtaText: '', downloadReceivedText: '',
+    remoteLatestVersion: ''
   };
+
+  private lastProgressPatchTime = 0;
+  private readonly PROGRESS_THROTTLE_MS = 300;
 
   constructor(dashboard: DashboardState) {
     this.dashboard = dashboard;
@@ -76,6 +95,18 @@ export class SettingsStateHolder {
   patchSetting(p: Partial<SettingsUiState>): void {
     this.patch(p);
   }
+
+  private maybePatchProgress(p: Partial<SettingsUiState>): void {
+    const now = Date.now();
+    if (now - this.lastProgressPatchTime >= this.PROGRESS_THROTTLE_MS) {
+      this.lastProgressPatchTime = now;
+      this.patch(p);
+    }
+  }
+
+  // ============================================
+  // 加载 / 保存配置
+  // ============================================
 
   loadConfig(): void {
     try {
@@ -138,6 +169,10 @@ export class SettingsStateHolder {
     }
   }
 
+  // ============================================
+  // 人格卡
+  // ============================================
+
   async loadCards(): Promise<void> {
     this.patch({ isLoadingCards: true });
     try {
@@ -166,6 +201,10 @@ export class SettingsStateHolder {
   selectCard(id: string, name: string): void {
     this.patch({ personalityCardId: id, personalityName: name });
   }
+
+  // ============================================
+  // 暂存区
+  // ============================================
 
   refreshPendingStatus(): void {
     try {
@@ -199,12 +238,16 @@ export class SettingsStateHolder {
     }
   }
 
+  // ============================================
+  // 日志
+  // ============================================
+
   refreshLogSize(): void {
     try {
       const File = Java.type("java.io.File");
       const f = new File(LOG_FILE_PATH);
       const sz = f.exists() ? f.length() : 0;
-      this.patch({ logSizeText: this.formatSize(sz) });
+      this.patch({ logSizeText: formatBytes(sz) });
     } catch (e) {
       this.patch({ logSizeText: '0 B' });
     }
@@ -222,22 +265,20 @@ export class SettingsStateHolder {
     }
   }
 
-  private formatSize(bytes: number): string {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    return (bytes / 1073741824).toFixed(1) + ' GB';
-  }
-
   openConfigPage(): void {
     resetConfig();
     this.dashboard.nav.navigate('config');
     this.dashboard.showBanner('已重置 AI 配置', 'info');
   }
 
+  // ============================================
+  // 客户端：状态检测
+  // ============================================
+
   async refreshClientStatus(): Promise<void> {
     try {
-      const context = Java.getApplicationContext();
+      const context: any = Java.callStatic('android.app.ActivityThread', 'currentApplication');
+      if (!context) throw new Error('无法获取 Context');
       const pm = context.getPackageManager();
       const info = pm.getPackageInfo(CLIENT_PACKAGE_NAME, 0);
       this.patch({
@@ -246,7 +287,11 @@ export class SettingsStateHolder {
         clientVersionCode: Number(info.longVersionCode || info.versionCode || 0)
       });
     } catch (e: any) {
-      this.patch({ clientInstalled: false, clientVersionName: '', clientVersionCode: 0 });
+      this.patch({
+        clientInstalled: false,
+        clientVersionName: '',
+        clientVersionCode: 0
+      });
     }
   }
 
@@ -256,30 +301,248 @@ export class SettingsStateHolder {
     return s.clientVersionCode < CLIENT_VERSION_CODE;
   }
 
+  // ============================================
+  // 客户端：从云端下载 + 安装
+  // ============================================
+
   async installClient(): Promise<void> {
     if (this.state.clientInstalling) return;
-    this.patch({ clientInstalling: true, clientStatus: '正在准备 APK…' });
-    try {
-      const srcPath = await ToolPkg.readResource(CLIENT_APK_RESOURCE_KEY, CLIENT_APK_FILENAME);
-      if (!srcPath) throw new Error('readResource 返回空');
 
-      const exists = await Tools.Files.exists(srcPath);
-      if (!exists || !exists.exists) throw new Error('APK 不存在: ' + srcPath);
+    this.patch({
+      clientInstalling: true,
+      clientStatus: '正在获取版本信息…',
+      downloadActive: false,
+      downloadProgress: 0,
+      downloadSpeedText: '',
+      downloadEtaText: '',
+      downloadReceivedText: ''
+    });
+
+    await new Promise<void>((r) => setTimeout(() => r(), 16));
+
+    try {
+      // ---- 1. 目录 API ----
+      logInfo("Settings", "请求目录 API: " + CLIENT_API_URL);
+      const dirJson = await httpGetWithTimeout(CLIENT_API_URL, 15);
+      const dirApi = JSON.parse(dirJson);
+      if (!dirApi || dirApi.code !== 0) {
+        throw new Error('目录 API 返回错误: code=' + (dirApi?.code ?? '??'));
+      }
+
+      const metaPath = dirApi.metadata?.meta?.apk || '';
+      const latestFile = dirApi.metadata?.latest?.apk || '';
+      const latestVer = dirApi.metadata?.latest_version || '';
+      if (!latestFile) throw new Error('API 未返回 APK 文件名');
 
       this.patch({
-        clientStatus: 'APK 已就绪（' + Math.round(exists.size / 1024) + ' KB），正在打开安装程序…'
+        remoteLatestVersion: latestVer,
+        clientStatus: '正在解析下载地址…'
+      });
+      logInfo("Settings", "远端版本: " + latestVer + ", 文件名: " + latestFile);
+
+      await new Promise<void>((r) => setTimeout(() => r(), 16));
+
+      // ---- 2. 文件 API ----
+      const fileApiUrl = buildApkUrl(CLIENT_API_URL, metaPath, latestFile);
+      logInfo("Settings", "请求文件 API: " + fileApiUrl);
+
+      const fileJson = await httpGetWithTimeout(fileApiUrl, 20);
+      const fileMeta = JSON.parse(fileJson);
+      if (!fileMeta || fileMeta.code !== 0) {
+        throw new Error('文件 API 返回错误: code=' + (fileMeta?.code ?? '??'));
+      }
+
+      const downloadPath = fileMeta.file?.download_url || '';
+      if (!downloadPath) throw new Error('文件 API 未返回 download_url');
+
+      const downloadUrl = downloadPath.startsWith('http')
+        ? downloadPath
+        : CLIENT_DOWNLOAD_HOST + downloadPath;
+
+      const sizeBytes = Number(fileMeta.file?.size_bytes || 0);
+      logInfo("Settings", "下载 URL: " + downloadUrl + ", 大小: " + sizeBytes);
+
+      // ---- 3. 下载 ----
+      const destDir = '/storage/emulated/0/Download/Operit/overmem';
+      const destPath = destDir + '/' + latestFile;
+
+      this.patch({
+        clientStatus: '开始下载…',
+        downloadActive: true,
+        downloadProgress: 0,
+        downloadReceivedText: '',
+        downloadSpeedText: '',
+        downloadEtaText: ''
       });
 
-      const result = await Tools.System.installApp(srcPath);
-      if (result && (result as any).success === false) {
-        throw new Error((result as any).details || '安装器返回失败');
-      }
+      this.lastProgressPatchTime = 0;
+
+      await downloadFile(downloadUrl, destPath, (p) => {
+        const speedText = formatSpeed(p.speedBytesPerSec);
+        const etaText = p.etaSeconds > 0 ? '剩余 ' + formatEta(p.etaSeconds) : '';
+        const receivedText = p.totalBytes > 0
+          ? formatBytes(p.bytesReceived) + ' / ' + formatBytes(p.totalBytes)
+          : formatBytes(p.bytesReceived);
+
+        const safePercent = p.percent >= 0 ? p.percent : 0;
+
+        logInfo("Settings",
+          '进度 ' + (p.percent >= 0 ? Math.round(p.percent * 100) + '%' : '未知') +
+          ', ' + receivedText);
+
+        this.maybePatchProgress({
+          downloadProgress: safePercent,
+          downloadSpeedText: speedText,
+          downloadEtaText: etaText,
+          downloadReceivedText: receivedText
+        });
+      }, sizeBytes);
+
+      this.patch({
+        downloadActive: false,
+        downloadProgress: 1,
+        clientStatus: '下载完成，拉起安装器…'
+      });
+
+      // ---- 4. 安装 ----
+      await this.installApk(destPath);
       this.patch({ clientStatus: '已发起安装，请按系统提示完成' });
     } catch (e: any) {
-      logError("Settings", "安装客户端失败: " + (e.message || e));
-      this.patch({ clientStatus: '安装失败: ' + (e.message || e) });
+      const msg = e && e.message ? e.message : String(e);
+      logError("Settings", "安装客户端失败: " + msg);
+      this.patch({
+        clientStatus: '安装失败: ' + msg,
+        downloadActive: false
+      });
     } finally {
       this.patch({ clientInstalling: false });
     }
+  }
+
+  // ============================================
+  // 客户端：安装 APK（四级 fallback）
+  // ============================================
+
+  private async installApk(apkPath: string): Promise<void> {
+    const File = Java.type('java.io.File');
+    const apkFile = new File(apkPath);
+    if (!apkFile.exists()) throw new Error('APK 不存在: ' + apkPath);
+
+    // 先拿 Context（后面几种方案都需要）
+    let context: any = null;
+    try {
+      context = Java.callStatic('android.app.ActivityThread', 'currentApplication');
+      if (context) logInfo("Settings", "Context via ActivityThread.currentApplication");
+    } catch (e: any) {
+      logWarn("Settings", "ActivityThread.currentApplication 失败: " + e.message);
+    }
+    if (!context) {
+      try {
+        context = Java.callStatic('android.app.AppGlobals', 'getInitialApplication');
+        if (context) logInfo("Settings", "Context via AppGlobals.getInitialApplication");
+      } catch (e: any) {
+        logWarn("Settings", "AppGlobals.getInitialApplication 失败: " + e.message);
+      }
+    }
+    if (!context) throw new Error('无法获取 Android Context');
+
+    // ---- 方案 1：Tools.System.installApp ----
+    try {
+      logInfo("Settings", "[方案1] Tools.System.installApp");
+      const result = await Tools.System.installApp(apkPath);
+      if (result && (result as any).success !== false) {
+        logInfo("Settings", "[方案1] 成功");
+        return;
+      }
+      logWarn("Settings", "[方案1] 返回失败: " + JSON.stringify(result));
+    } catch (e: any) {
+      logWarn("Settings", "[方案1] 异常: " + (e.message || e));
+    }
+
+    // ---- 方案 2：Tools.System.intent (file://) ----
+    try {
+      logInfo("Settings", "[方案2] Tools.System.intent");
+      const r = await Tools.System.intent({
+        action: 'android.intent.action.VIEW',
+        uri: 'file://' + apkPath,
+        flags: 0x10000000
+      });
+      logInfo("Settings", "[方案2] 成功: " + JSON.stringify(r));
+      return;
+    } catch (e: any) {
+      logWarn("Settings", "[方案2] 异常: " + (e.message || e));
+    }
+
+    // ---- 方案 3：反射关掉 StrictMode 的 file:// 检查 + Java Bridge Intent ----
+    try {
+      logInfo("Settings", "[方案3] StrictMode 反射 + Java Bridge Intent");
+
+      // 反射调用 StrictMode.disableDeathOnFileUriExposure
+      try {
+        const StrictModeClass: any = Java.callStatic(
+          'java.lang.Class', 'forName', 'android.os.StrictMode'
+        );
+        const method: any = StrictModeClass.getMethod('disableDeathOnFileUriExposure');
+        method.invoke(null);
+        logInfo("Settings", "[方案3] StrictMode.disableDeathOnFileUriExposure 成功");
+      } catch (e: any) {
+        logWarn("Settings", "[方案3] StrictMode 反射失败: " + (e.message || e));
+      }
+
+      const Uri = Java.type('android.net.Uri');
+      const Intent = Java.type('android.content.Intent');
+      const uri = Uri.fromFile(apkFile);
+      const intent = new Intent('android.intent.action.VIEW');
+      intent.setDataAndType(uri, 'application/vnd.android.package-archive');
+      intent.addFlags(0x10000000);            // FLAG_ACTIVITY_NEW_TASK
+      intent.addFlags(0x00000001);            // FLAG_GRANT_READ_URI_PERMISSION
+      context.startActivity(intent);
+      logInfo("Settings", "[方案3] 成功");
+      return;
+    } catch (e: any) {
+      logWarn("Settings", "[方案3] 异常: " + (e.message || e));
+    }
+
+    // ---- 方案 4：FileProvider（再次尝试） ----
+    try {
+      logInfo("Settings", "[方案4] FileProvider");
+
+      const pkgName = String(context.getPackageName());
+      const authorities = [
+        pkgName + '.fileprovider',
+        pkgName + '.fileProvider',
+        pkgName + '.provider',
+        pkgName + '.FileProvider',
+        'com.ai.assistance.operit.fileprovider'
+      ];
+      let uri: any = null;
+      for (const auth of authorities) {
+        try {
+          uri = Java.callStatic(
+            'androidx.core.content.FileProvider',
+            'getUriForFile',
+            context, auth, apkFile
+          );
+          logInfo("Settings", "[方案4] authority=" + auth + " 命中");
+          break;
+        } catch (e: any) {
+          logWarn("Settings", "[方案4] authority=" + auth + " 失败: " + (e.message || e));
+        }
+      }
+      if (!uri) throw new Error('所有 authority 都失败');
+
+      const Intent = Java.type('android.content.Intent');
+      const intent = new Intent('android.intent.action.VIEW');
+      intent.setDataAndType(uri, 'application/vnd.android.package-archive');
+      intent.addFlags(1);
+      intent.addFlags(0x10000000);
+      context.startActivity(intent);
+      logInfo("Settings", "[方案4] 成功");
+      return;
+    } catch (e: any) {
+      logWarn("Settings", "[方案4] 异常: " + (e.message || e));
+    }
+
+    throw new Error('所有安装方式均失败\n请手动从以下路径安装：\n' + apkPath);
   }
 }

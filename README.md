@@ -7,7 +7,7 @@
     <br><br>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/GitHub-OverMem-blue?style=for-the-badge&logo=github"></img></a>
     <a href="https://git.repo.archive.serveryyswys.top/yyswys-yjyj/com.operit.overmem"><img src="https://img.shields.io/badge/Gitea-OverMem-green?style=for-the-badge&logo=gitea"></img></a>
-    <img src="https://img.shields.io/badge/version-0.1.1--Alpha-orange?style=for-the-badge"></img>
+    <img src="https://img.shields.io/badge/version-0.2.0--Beta-orange?style=for-the-badge"></img>
     <a href="https://github.com/yyswys-yjyj/com.operit.overmem/LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge"></img></a>
     <img src="https://img.shields.io/github/stars/yyswys-yjyj/com.operit.overmem?style=for-the-badge&logo=github&color=yellow"></img>
 </div>
@@ -322,8 +322,9 @@ stateDiagram-v2
 
 ## 最新动态
 
-第一个可使用的 Alpha 版本在今天正式发布！
-如果您在测试使用的时候有任何问题，欢迎提交 issue。
+Beta 0.2.0 发布！   
+全新的架构设计，更好的方法让AI记事！   
+如果您在测试使用的时候有任何问题，欢迎提交 issue。   
 
 ## 安装与使用
 

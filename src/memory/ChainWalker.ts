@@ -294,7 +294,7 @@ export class ChainWalker {
         continue;
       }
 
-      // 4. ★ 先拉节点（为了读 arousal）
+      // 4. 先拉节点（为了读 arousal）
       let node = nodeCache.get(dstId);
       if (!node) {
         const n = this.nodes.getById(dstId);
@@ -304,7 +304,7 @@ export class ChainWalker {
         node = n;
       }
 
-      // 5. ★ arousal 加成后再算 contrib
+      // 5. arousal 加成后再算 contrib
       const arousalBoost = 1 + (node.arousal || 0) * 0.5;
       const recalledBoost = 1 + Math.log(1 + (node.recalledCount || 0)) * 0.15;
       const contrib = srcAct * effWeight * decay * Random.jitter(noiseTemp) * arousalBoost * recalledBoost;

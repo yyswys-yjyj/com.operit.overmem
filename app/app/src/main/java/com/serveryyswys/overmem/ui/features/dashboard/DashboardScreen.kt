@@ -1,6 +1,7 @@
 package com.serveryyswys.overmem.ui.features.dashboard
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bolt
@@ -20,11 +22,10 @@ import androidx.compose.material.icons.filled.Celebration
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.HealthAndSafety
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -52,7 +53,6 @@ import com.serveryyswys.overmem.ui.theme.Primary
 import com.serveryyswys.overmem.ui.theme.StateActive
 import com.serveryyswys.overmem.ui.theme.Success
 import java.util.Calendar
-import androidx.compose.material.icons.filled.Extension
 
 @Composable
 fun DashboardScreen(
@@ -155,13 +155,13 @@ fun DashboardScreen(
             ) {
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    title = "短期记忆", value = state.shortCount,
+                    title = "事件", value = state.shortCount,
                     icon = Icons.Default.Bolt, color = LevelShort
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    title = "中期记忆", value = state.midCount,
-                    icon = Icons.Default.MenuBook, color = LevelMid
+                    title = "主题", value = state.midCount,
+                    icon = Icons.AutoMirrored.Filled.MenuBook, color = LevelMid
                 )
             }
         }
@@ -172,13 +172,13 @@ fun DashboardScreen(
             ) {
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    title = "长期记忆", value = state.longCount,
+                    title = "叙事", value = state.longCount,
                     icon = Icons.Default.Archive, color = LevelLong
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    title = "活跃", value = state.activeCount,
-                    icon = Icons.Default.Star, color = StateActive
+                    title = "暂存", value = state.pendingCount,
+                    icon = Icons.Default.Pending, color = StateActive
                 )
             }
         }

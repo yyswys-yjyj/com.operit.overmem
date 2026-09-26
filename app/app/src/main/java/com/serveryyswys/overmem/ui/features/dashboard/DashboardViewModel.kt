@@ -17,7 +17,7 @@ data class DashboardUiState(
     val shortCount: Int = 0,
     val midCount: Int = 0,
     val longCount: Int = 0,
-    val activeCount: Int = 0,
+    val pendingCount: Int = 0,
     val sessionCount: Int = 0,
     val daysSinceInit: Long = 0L,
     val config: OverMemConfig = OverMemConfig(),
@@ -43,13 +43,13 @@ class DashboardViewModel : ViewModel() {
                     val sessions = dao.getAllSessionMeta()
                     val config = dao.getConfig()
 
-                    var short = 0; var mid = 0; var long = 0; var active = 0
+                    var short = 0; var mid = 0; var long = 0; var pending = 0
                     sessions.forEach { s ->
                         val (scopeType, scopeId) = dao.getScope(s.sessionId, s.roleCardId)
-                        short  += dao.getShortBlockCount(scopeType, scopeId)
-                        mid    += dao.getMidBlockCount(scopeType, scopeId)
-                        long   += dao.getLongBlockCount(scopeType, scopeId)
-                        active += dao.getStats(scopeType, scopeId).totalActiveBlocks
+                        short += dao.getBlockCount(scopeType, scopeId)
+                        mid += dao.getMidBlockCount(scopeType, scopeId)
+                        long += dao.getLongBlockCount(scopeType, scopeId)
+                        pending += dao.getPendingMessages(scopeType, scopeId).size
                     }
 
                     val days = if (config.initTimestamp > 0) {
@@ -61,7 +61,7 @@ class DashboardViewModel : ViewModel() {
                         shortCount = short,
                         midCount = mid,
                         longCount = long,
-                        activeCount = active,
+                        pendingCount = pending,
                         sessionCount = sessions.size,
                         daysSinceInit = days,
                         config = config,
