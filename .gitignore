@@ -19,3 +19,4 @@ app/queries/
 app/dataSources/
 app/dataSources.local.xml
 app/local.properties
+*.txt
