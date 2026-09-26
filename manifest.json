@@ -9,8 +9,8 @@
     "en": "Over Memory(Memories Comes Back)"
   },
   "description": {
-    "zh": "记忆库（开发中）",
-    "en": "Mem DB(In-dev)"
+    "zh": "基于Operit的记忆库，贴合Operit生态，记录点点滴滴。",
+    "en": "Based on Operit's memory library, it fits the Operit ecosystem and records every little detail."
   },
   "subpackages": [
   ],
