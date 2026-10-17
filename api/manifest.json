@@ -18,7 +18,7 @@
     },
     "DisplayVersion":"0.3.0",
     "newfeatures":"修复0.2.0的众多BUG",
-    "commit":"NULL"
+    "commit":"ef463ed"
   },
   "i18n-market":{
     "note":"暂无计划"
