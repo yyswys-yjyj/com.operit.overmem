@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "toolpkg_id": "com.operit.overmem",
-  "version": "0.2.0-Beta(2020)",
+  "version": "0.2.1-Beta(2021)",
   "author": ["yyswys-yjyj"],
   "license":"GPL-3.0-or-later",
   "main": "dist/main.js",

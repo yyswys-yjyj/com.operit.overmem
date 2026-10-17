@@ -1,6 +1,9 @@
 // main.ts
 /// <reference path="../types/index.d.ts" />
 
+// SPDX-FileCopyrightText: 2026 yyswys-yjyj
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { DatabaseManager } from './db/DatabaseManager.js';
 import { ShortTermMemory } from './memory/ShortTerm.js';
 import { MemoryInjector } from './memory/MemoryInjector.js';

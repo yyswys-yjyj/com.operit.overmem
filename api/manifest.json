@@ -5,7 +5,7 @@
         "Major":0,
         "Minor":0
     },
-    "DisplayVersion":"0.2.0"
+    "DisplayVersion":"0.3.0"
   },
   "pre-release":{
     "avalible":true,
@@ -13,12 +13,12 @@
         "type":2,
         "note":"1=Alpha, 2=Beta, 3=RC",
         "Main":0,
-        "Major":2,
+        "Major":3,
         "Minor":0
     },
-    "DisplayVersion":"0.2.0",
-    "newfeatures":"完全重构记忆算法，使用了一种更好的方法。",
-    "commit":"37752a2"
+    "DisplayVersion":"0.3.0",
+    "newfeatures":"修复0.2.0的众多BUG",
+    "commit":"NULL"
   },
   "i18n-market":{
     "note":"暂无计划"

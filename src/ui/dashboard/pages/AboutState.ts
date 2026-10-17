@@ -7,7 +7,7 @@ import { logInfo, logError, logWarn } from '../../../utils/Logger.js';
 
 const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 
-const CURRENT_VERSION = { Main: 0, Major: 2, Minor: 0 };
+const CURRENT_VERSION = { Main: 0, Major: 2, Minor: 1 };
 const CURRENT_VERSION_TYPE = 'Beta';
 
 const UPDATE_URLS = [
