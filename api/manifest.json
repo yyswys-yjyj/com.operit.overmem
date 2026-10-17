@@ -16,7 +16,7 @@
         "Major":2,
         "Minor":1
     },
-    "DisplayVersion":"0.3.0",
+    "DisplayVersion":"0.2.1",
     "newfeatures":"修复0.2.0的众多BUG",
     "commit":"ef463ed"
   },
