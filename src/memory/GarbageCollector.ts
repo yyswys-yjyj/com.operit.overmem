@@ -46,7 +46,6 @@ export class GarbageCollector {
            AND NOT EXISTS (
              SELECT 1 FROM edges e
              WHERE (e.from_node=n.id OR e.to_node=n.id)
-               AND e.edge_type IN ('time','recall')
            )`,
         []
       );

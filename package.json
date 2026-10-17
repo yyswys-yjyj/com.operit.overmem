@@ -3,14 +3,18 @@
   "version": "0.2.0",
   "description": "智能记忆库系统 - 基于SQLite的持久化记忆管理",
   "main": "dist/main.js",
+  "license":"GPL-3.0-or-later",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "build": "opm build"
   },
   "devDependencies": {
+    "@serveryyswys/node.operit": "^0.1.7",
+    "@serveryyswys/opm": "^0.1.5",
     "typescript": "^5.0.0"
   },
   "dependencies": {
     "segmentit": "^2.0.3"
-  }
+  },
+  "private": true
 }

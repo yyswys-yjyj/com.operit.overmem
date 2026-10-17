@@ -74,7 +74,7 @@ export function WelcomePage(
   ));
   items.push(ctx.UI.Spacer({ height: 6 }));
   items.push(renderStatRow(ctx,
-    '会话', formatCount(state.sessionCount), cs.primary, 'chat',
+    '缓存', formatCount(state.pendingCount), cs.tertiary, 'hourglass_empty',
     '加载项', formatCount(state.addonCount), cs.secondary, 'extension'
   ));
   items.push(ctx.UI.Spacer({ height: 10 }));

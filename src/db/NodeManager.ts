@@ -312,29 +312,38 @@ export class NodeManager {
 
   /**
    * 尚未被 mid 折叠的 block。
+   *
+   * fold 边方向：from = 父（mid），to = 子（block）。
+   *
+   * 可选 sessionId：过滤到某个会话的未折叠 block。
    */
-  getUnfoldedBlocks(scopeType: ScopeType, scopeId: string, limit?: number): MemoryNode[] {
+  getUnfoldedBlocks(
+    scopeType: ScopeType, scopeId: string,
+    limit?: number, sessionId?: string
+  ): MemoryNode[] {
     try {
       const conn = this.db.getConnection();
-      // 16 列，与 rowToNode 对齐
+      // 19 列，与 rowToNode 对齐
       let sql = `
         SELECT n.id, n.node_type, n.scope_type, n.scope_id, n.session_id,
                n.role, n.level, n.content, n.timestamp, n.created_at, n.updated_at,
                n.trashed_at, n.msg_id, n.seq, n.is_pending, n.arousal,
-               n.recalled_count, n.last_recalled_at
+               n.recalled_count, n.last_recalled_at, n.meta
         FROM nodes n
         WHERE n.scope_type=? AND n.scope_id=? AND n.node_type='block'
           AND n.trashed_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM edges e
-            WHERE e.from_node = n.id
+            WHERE e.to_node = n.id
               AND e.edge_type = 'fold'
-              AND e.to_node IN (
-                SELECT id FROM nodes WHERE node_type='summary' AND level='mid'
+              AND e.from_node IN (
+                SELECT id FROM nodes
+                WHERE node_type='summary' AND level='mid'
               )
-          )
-        ORDER BY n.seq ASC`;
+          )`;
       const args: any[] = [scopeType, scopeId];
+      if (sessionId) { sql += ' AND n.session_id=?'; args.push(sessionId); }
+      sql += ' ORDER BY n.seq ASC';
       if (limit) { sql += ' LIMIT ?'; args.push(limit); }
 
       const cursor = conn.rawQuery(sql, args);
@@ -351,27 +360,32 @@ export class NodeManager {
   /**
    * 尚未被 long 折叠的 mid。
    */
-  getUnfoldedMidBlocks(scopeType: ScopeType, scopeId: string, limit?: number): MemoryNode[] {
+  getUnfoldedMidBlocks(
+    scopeType: ScopeType, scopeId: string,
+    limit?: number, sessionId?: string
+  ): MemoryNode[] {
     try {
       const conn = this.db.getConnection();
       let sql = `
         SELECT n.id, n.node_type, n.scope_type, n.scope_id, n.session_id,
                n.role, n.level, n.content, n.timestamp, n.created_at, n.updated_at,
                n.trashed_at, n.msg_id, n.seq, n.is_pending, n.arousal,
-               n.recalled_count, n.last_recalled_at
+               n.recalled_count, n.last_recalled_at, n.meta
         FROM nodes n
         WHERE n.scope_type=? AND n.scope_id=? AND n.node_type='summary'
           AND n.level='mid' AND n.trashed_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM edges e
-            WHERE e.from_node = n.id
+            WHERE e.to_node = n.id
               AND e.edge_type = 'fold'
-              AND e.to_node IN (
-                SELECT id FROM nodes WHERE node_type='summary' AND level='long'
+              AND e.from_node IN (
+                SELECT id FROM nodes
+                WHERE node_type='summary' AND level='long' AND trashed_at IS NULL
               )
-          )
-        ORDER BY n.seq ASC`;
+          )`;
       const args: any[] = [scopeType, scopeId];
+      if (sessionId) { sql += ' AND n.session_id=?'; args.push(sessionId); }
+      sql += ' ORDER BY n.seq ASC';
       if (limit) { sql += ' LIMIT ?'; args.push(limit); }
 
       const cursor = conn.rawQuery(sql, args);
@@ -383,6 +397,98 @@ export class NodeManager {
       logError("NodeManager", "getUnfoldedMidBlocks 失败: " + e.message);
       return [];
     }
+  }
+
+  // ============================================
+  // 折叠触发判断 / 计数
+  // ============================================
+
+  /**
+   * 统计未折叠 block 数。
+   * - 指定 sessionId：只统计该会话的
+   * - 不指定：统计整个 scope 的（所有会话）
+   */
+  countUnfoldedBlocks(
+    scopeType: ScopeType, scopeId: string, sessionId?: string
+  ): number {
+    try {
+      const conn = this.db.getConnection();
+      let sql = `
+        SELECT COUNT(*) FROM nodes n
+        WHERE n.scope_type=? AND n.scope_id=? AND n.node_type='block'
+          AND n.trashed_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM edges e
+            WHERE e.to_node = n.id
+              AND e.edge_type='fold'
+              AND e.from_node IN (
+                SELECT id FROM nodes
+                WHERE node_type='summary' AND level='mid'
+              )
+          )`;
+      const args: any[] = [scopeType, scopeId];
+      if (sessionId) { sql += ' AND n.session_id=?'; args.push(sessionId); }
+
+      const c = conn.rawQuery(sql, args);
+      const n = c.moveToFirst() ? c.getInt(0) : 0;
+      c.close();
+      return n;
+    } catch (e: any) {
+      logError("NodeManager", "countUnfoldedBlocks 失败: " + e.message);
+      return 0;
+    }
+  }
+
+  /**
+   * 统计未折叠 mid 数。
+   */
+  countUnfoldedMidBlocks(
+    scopeType: ScopeType, scopeId: string, sessionId?: string
+  ): number {
+    try {
+      const conn = this.db.getConnection();
+      let sql = `
+        SELECT COUNT(*) FROM nodes n
+        WHERE n.scope_type=? AND n.scope_id=? AND n.node_type='summary'
+          AND n.level='mid' AND n.trashed_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM edges e
+            WHERE e.to_node = n.id
+              AND e.edge_type='fold'
+              AND e.from_node IN (
+                SELECT id FROM nodes
+                WHERE node_type='summary' AND level='long' AND trashed_at IS NULL
+              )
+          )`;
+      const args: any[] = [scopeType, scopeId];
+      if (sessionId) { sql += ' AND n.session_id=?'; args.push(sessionId); }
+
+      const c = conn.rawQuery(sql, args);
+      const n = c.moveToFirst() ? c.getInt(0) : 0;
+      c.close();
+      return n;
+    } catch (e: any) {
+      logError("NodeManager", "countUnfoldedMidBlocks 失败: " + e.message);
+      return 0;
+    }
+  }
+
+  /**
+   * 判断当前会话是否达到折叠触发阈值。
+   *
+   * 所有模式（独立 / 透传 / 全局）都用"当前会话的未折叠数"判断。
+   * 折叠范围由调用方决定：
+   *   - 独立会话：只折叠当前会话（= scope 本身）
+   *   - 角色卡透传 / 全局共享：折叠整个 scope 的全部未折叠
+   */
+  shouldTriggerConsolidation(
+    scopeType: ScopeType, scopeId: string, sessionId: string,
+    threshold: number, level: 'mid' | 'long' = 'mid'
+  ): boolean {
+    const count = level === 'long'
+      ? this.countUnfoldedMidBlocks(scopeType, scopeId, sessionId)
+      : this.countUnfoldedBlocks(scopeType, scopeId, sessionId);
+    return count >= threshold;
   }
 
   // ============================================

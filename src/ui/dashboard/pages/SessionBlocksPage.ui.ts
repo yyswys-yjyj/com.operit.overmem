@@ -32,6 +32,9 @@ export function SessionBlocksPage(
     ctx.UI.Text({
       text: '会话: ' + state.title,
       fontSize: 18, fontWeight: 'bold',
+      color: cs.onSurface,
+      maxLines: 1,
+      overflow: 'ellipsis',
       modifier: ctx.Modifier.weight(1)
     })
   ]));

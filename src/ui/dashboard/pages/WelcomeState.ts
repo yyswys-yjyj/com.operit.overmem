@@ -5,6 +5,7 @@ import { DashboardState } from '../DashboardState.js';
 import { DatabaseManager } from '../../../db/DatabaseManager.js';
 import { NodeManager } from '../../../db/NodeManager.js';
 import { MemoryNode } from '../../../db/models.js';
+import { ShortTermMemory } from '../../../memory/ShortTerm.js';
 import { logInfo, logError, logWarn } from '../../../utils/Logger.js';
 
 export type HomeTab = 'welcome' | 'sessions' | 'addons' | 'settings';
@@ -19,6 +20,7 @@ export interface WelcomeUiState {
   midCount: number;
   longCount: number;
   activeCount: number;
+  pendingCount: number;
   sessionCount: number;
   addonCount: number;
   daysSinceInit: number;
@@ -74,7 +76,8 @@ export class WelcomeStateHolder {
       greeting: getRandomGreeting(),
       timeGreeting: getTimeGreeting(),
       timeIcon: getTimeIcon(),
-      shortCount: 0, midCount: 0, longCount: 0, activeCount: 0,
+      shortCount: 0, midCount: 0, longCount: 0,
+      activeCount: 0, pendingCount: 0,
       sessionCount: 0, addonCount: 0, daysSinceInit: 0,
       homeTab: 'welcome',
       sessionsSubTab: 'overview',
@@ -103,13 +106,14 @@ export class WelcomeStateHolder {
       const nodes = new NodeManager(db);
       const sessionList = db.getAllSessionMeta();
 
-      let shortCount = 0, midCount = 0, longCount = 0;
+      let shortCount = 0, midCount = 0, longCount = 0, pendingCount = 0;
 
       for (const s of sessionList) {
         const scope = db.getScope(s.sessionId, s.roleCardId || '');
         shortCount += nodes.getBlockCount(scope.type, scope.id);
         midCount += nodes.getMidBlockCount(scope.type, scope.id);
         longCount += nodes.getLongBlockCount(scope.type, scope.id);
+        pendingCount += nodes.getPendingMessages(scope.type, scope.id).length;
       }
 
       let days = 0;
@@ -130,11 +134,13 @@ export class WelcomeStateHolder {
         timeIcon: getTimeIcon(),
         shortCount, midCount, longCount,
         activeCount: 0,   // 新架构下无"活跃"概念，暂置 0
+        pendingCount,
         sessionCount: sessionList.length,
         daysSinceInit: days,
       };
       this.dashboard.markHealthy();
-      logInfo("Welcome", `刷新完成 短=${shortCount} 中=${midCount} 长=${longCount}`);
+      logInfo("Welcome",
+        `刷新完成 短=${shortCount} 中=${midCount} 长=${longCount} 缓存=${pendingCount}`);
     } catch (e: any) {
       logError("Welcome", "刷新失败: " + e.message);
       this.dashboard.reportError(e.message);

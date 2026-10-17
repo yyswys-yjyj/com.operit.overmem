@@ -37,15 +37,14 @@ export class LongTermMemory {
     logInfo("LongTerm", `开始长期整理: ${scopeType}=${scopeId}`);
     try {
       const cfg = this.db.getConfig();
-      const threshold = cfg.longThreshold || 20;
       const unfolded = this.nodes.getUnfoldedMidBlocks(scopeType, scopeId);
       if (unfolded.length === 0) {
         logInfo("LongTerm", "无未折叠中期块");
         return -1;
       }
 
-      const takeCount = Math.min(unfolded.length, threshold);
-      const selected = unfolded.slice(0, takeCount);
+      // 折叠 scope 内全部未折叠 mid
+      const selected = unfolded;
       const sourceIds = selected.map(m => m.id);
 
       const timeStart = selected[0].timestamp;
@@ -161,10 +160,10 @@ ${text}`;
   /**
    * 检查是否需要"睡眠重放"。
    * 触发条件（任一）：
-   *   1. 未折叠 mid >= longThreshold  → 紧急折叠
-   *   2. 距上次重放 >= replayIntervalMs 且未折叠 mid >= replayMinBatch  → 定期批量
+   *   1. 当前会话未折叠 mid >= longThreshold  → 紧急折叠
+   *   2. 距上次重放 >= replayIntervalMs 且 scope 未折叠 mid >= replayMinBatch  → 定期批量
    *
-   * 触发后：按 replayBatchSize 折叠一小批（紧急路径除外）。
+   * 折叠范围：整个 scope 的全部未折叠 mid。
    */
   public async replayIfNeeded(
     scopeType: ScopeType, scopeId: string, sessionId: string
@@ -172,28 +171,30 @@ ${text}`;
     try {
       const cfg = this.db.getConfig();
       const now = Date.now();
-      const unfolded = this.nodes.getUnfoldedMidBlocks(scopeType, scopeId);
-
-      if (unfolded.length === 0) return false;
-
-      // 条件 1：紧急
       const threshold = cfg.longThreshold || 20;
-      if (unfolded.length >= threshold) {
-        logInfo("LongTerm", `紧急重放触发: 未折叠 mid=${unfolded.length}/${threshold}`);
+
+      // 条件 1：紧急（按当前会话未折叠 mid 判断）
+      if (this.nodes.shouldTriggerConsolidation(
+        scopeType, scopeId, sessionId, threshold, 'long'
+      )) {
+        logInfo("LongTerm", "紧急重放触发");
         await this.consolidate(scopeType, scopeId, sessionId);
         this.updateLastReplayAt(now);
         return true;
       }
 
-      // 条件 2：定期
+      // 条件 2：定期（scope 总数达到 minBatch）
+      const totalUnfolded = this.nodes.countUnfoldedMidBlocks(scopeType, scopeId);
+      if (totalUnfolded === 0) return false;
+
       const interval = cfg.replayIntervalMs || 6 * 60 * 60 * 1000;
       const minBatch = cfg.replayMinBatch || 5;
       const sinceLast = now - (cfg.lastReplayAt || 0);
 
-      if (sinceLast >= interval && unfolded.length >= minBatch) {
+      if (sinceLast >= interval && totalUnfolded >= minBatch) {
         logInfo("LongTerm",
           `睡眠重放触发: 距上次=${Math.round(sinceLast / 3600000)}h, ` +
-          `未折叠 mid=${unfolded.length}`);
+          `scope 未折叠 mid=${totalUnfolded}`);
         await this.consolidate(scopeType, scopeId, sessionId);
         this.updateLastReplayAt(now);
         return true;

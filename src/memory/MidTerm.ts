@@ -31,9 +31,11 @@ export class MidTermMemory {
   ): Promise<boolean> {
     const cfg = this.db.getConfig();
     const threshold = cfg.midThreshold || 40;
-    const unfolded = this.nodes.getUnfoldedBlocks(scopeType, scopeId);
-    logDebug("MidTerm", `未折叠短块=${unfolded.length}/${threshold}`);
-    if (unfolded.length >= threshold) {
+    const shouldTrigger = this.nodes.shouldTriggerConsolidation(
+      scopeType, scopeId, sessionId, threshold, 'mid'
+    );
+    logDebug("MidTerm", `触发判断=${shouldTrigger} (threshold=${threshold})`);
+    if (shouldTrigger) {
       logInfo("MidTerm", "达到中期整理阈值");
       await this.consolidate(scopeType, scopeId, sessionId);
       return true;
@@ -47,15 +49,14 @@ export class MidTermMemory {
     logInfo("MidTerm", `开始中期整理: ${scopeType}=${scopeId}`);
     try {
       const cfg = this.db.getConfig();
-      const threshold = cfg.midThreshold || 40;
       const unfolded = this.nodes.getUnfoldedBlocks(scopeType, scopeId);
       if (unfolded.length === 0) {
         logInfo("MidTerm", "无未折叠短块");
         return -1;
       }
 
-      const takeCount = Math.min(unfolded.length, threshold);
-      const selected = unfolded.slice(0, takeCount);
+      // 折叠 scope 内全部未折叠 block（独立模式=当前会话；透传/全局=整个 scope）
+      const selected = unfolded;
       const sourceIds = selected.map(b => b.id);
 
       // 时间范围

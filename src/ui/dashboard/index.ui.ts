@@ -36,14 +36,12 @@ const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 export default function DashboardScreen(ctx: any): any {
   const cs = ctx.MaterialTheme.colorScheme;
 
-  // ---- 初始化：先检测旧库，再决定首页 ----
   const dashboard = ctx.useMemo('dash_state', () => {
     let isLegacy = false;
     try {
       const db = DatabaseManager.getInstance(DB_PATH);
       isLegacy = db.checkLegacyV3();
     } catch (e: any) {
-      // 检测失败按新库处理
     }
 
     let initialPage: NavEntry;
@@ -75,8 +73,28 @@ export default function DashboardScreen(ctx: any): any {
 
   ctx.useMemo('dash_subscribe', () => {
     const off1 = dashboard.onChange(() => setTick((t: number) => t + 1));
-    const off2 = dashboard.nav.onChange(() => setTick((t: number) => t + 1));
 
+    // nav 变化：不仅重渲染，还要按当前页面触发对应 Holder 的数据加载
+    const off2 = dashboard.nav.onChange(() => {
+      setTick((t: number) => t + 1);
+
+      const entry = dashboard.nav.current();
+      if (entry.page === 'home') {
+        // 每次切到 home 都刷新，保证迁移后、切换 tab 后数据都是最新的
+        welcomeH.refresh();
+        overviewH.refresh();
+      } else if (entry.page === 'config') {
+        configH.reload();
+      } else if (entry.page === 'session_blocks') {
+        sessionsH.refresh();
+      } else if (entry.page === 'about') {
+        aboutH.refresh();
+      } else if (entry.page === 'addons') {
+        addonsH.refresh();
+      }
+    });
+
+    // 初始 mount 时也跑一次
     const entry = dashboard.nav.current();
     if (entry.page === 'home') {
       welcomeH.refresh();
@@ -84,6 +102,7 @@ export default function DashboardScreen(ctx: any): any {
     } else if (entry.page === 'config') {
       configH.reload();
     }
+
     return () => { off1(); off2(); };
   }, []);
 
@@ -126,6 +145,8 @@ function renderRoute(ctx: any, entry: NavEntry, h: Holders): any {
     case 'legacy_warning':
       return LegacyWarningPage(ctx, h.legacyWarningH.get(), {
         onRollback: () => h.legacyWarningH.openRollback(),
+        onExport: () => h.legacyWarningH.exportToJson(),
+        onMigrate: () => h.legacyWarningH.migrateData(),
         onForceMigrate: () => h.legacyWarningH.forceMigrate()
       });
 

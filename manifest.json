@@ -3,6 +3,7 @@
   "toolpkg_id": "com.operit.overmem",
   "version": "0.2.0-Beta(2020)",
   "author": ["yyswys-yjyj"],
+  "license":"GPL-3.0-or-later",
   "main": "dist/main.js",
   "display_name": {
     "zh": "旧忆重逢",

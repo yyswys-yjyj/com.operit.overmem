@@ -27,7 +27,10 @@ export function SessionsListPage(
     ctx.UI.Row({ horizontalArrangement: 'start', verticalAlignment: 'center' }, [
       ctx.UI.Icon({ name: 'chat', size: 18, tint: cs.primary }),
       ctx.UI.Spacer({ width: 8 }),
-      ctx.UI.Text({ text: '会话列表', fontSize: 16, fontWeight: 'bold' })
+      ctx.UI.Text({
+        text: '会话列表', fontSize: 16, fontWeight: 'bold',
+        color: cs.onSurface
+      })
     ]),
     IconTextButton(ctx, {
       text: '刷新',
@@ -66,7 +69,6 @@ function renderSessionRow(
   events: SessionsListPageEvents
 ): ComposeNode {
   const cs = ctx.MaterialTheme.colorScheme;
-  // Surface → Card，去掉默认轮廓线
   return ctx.UI.Card({
     elevation: 1,
     modifier: ctx.Modifier.fillMaxWidth()
@@ -81,7 +83,13 @@ function renderSessionRow(
       verticalAlignment: 'center'
     }, [
       ctx.UI.Column({ modifier: ctx.Modifier.weight(1) }, [
-        ctx.UI.Text({ text: session.title || '未命名会话', fontSize: 15, fontWeight: 'bold' }),
+        ctx.UI.Text({
+          text: session.title || '未命名会话',
+          fontSize: 15, fontWeight: 'bold',
+          color: cs.onSurface,
+          maxLines: 1,
+          overflow: 'ellipsis'
+        }),
         ctx.UI.Spacer({ height: 2 }),
         ctx.UI.Row({ verticalAlignment: 'center' }, [
           ctx.UI.Icon({ name: 'person', size: 12, tint: cs.onSurfaceVariant }),

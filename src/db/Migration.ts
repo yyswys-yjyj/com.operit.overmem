@@ -9,18 +9,12 @@ export class Migration {
   public static run(conn: any): boolean {
     logInfo("DB", "开始数据库迁移检查...");
     try {
-      // 1. 清理 v3 及更早版本的遗留表
-      this.dropLegacyTables(conn);
 
-      // 2. 确保表存在且结构完整
       for (const table of EXPECTED_TABLES) {
         this.ensureTable(conn, table);
       }
 
-      // 3. 索引
       this.ensureIndexes(conn);
-
-      // 4. 状态检测（只报告，不自动修）
       this.runDiagnostics(conn);
 
       logInfo("DB", "数据库迁移检查完成");
@@ -32,10 +26,29 @@ export class Migration {
   }
 
   // ============================================
-  // 清理旧表
+  // 新建：只建 v4 表，不删旧表
+  //
+  // 供 LegacyMigration 使用：
+  //   1. ensureV4Tables(conn)  → 建 nodes / edges / chain_meta / injection_log
+  //   2. 插入迁移数据
+  //   3. 成功后 dropLegacyTables(conn)
+  //
+  // 如果插入中途失败，v3 旧表保持完好，用户可以重试或从 bak 恢复。
   // ============================================
 
-  private static dropLegacyTables(conn: any): void {
+  public static ensureV4Tables(conn: any): void {
+    logInfo("DB", "ensureV4Tables：创建/补齐 v4 表结构（不动旧表）");
+    for (const table of EXPECTED_TABLES) {
+      this.ensureTable(conn, table);
+    }
+    this.ensureIndexes(conn);
+  }
+
+  // ============================================
+  // 清理旧表（改为 public）
+  // ============================================
+
+  public static dropLegacyTables(conn: any): void {
     for (const name of LEGACY_TABLES) {
       try {
         if (this.tableExists(conn, name)) {
@@ -150,13 +163,12 @@ export class Migration {
   }
 
   // ============================================
-  // 状态检测（只报告）
+  // 状态检测
   // ============================================
 
   private static runDiagnostics(conn: any): void {
     logInfo("DB", "—— 数据库状态检测 ——");
 
-    // 1. 孤立节点：没有任何边的 block/summary
     try {
       const c = conn.rawQuery(
         `SELECT COUNT(*) FROM nodes n
@@ -172,7 +184,6 @@ export class Migration {
       logWarn("DB", "孤立节点检测失败: " + e.message);
     }
 
-    // 2. 断裂链：head_id 指向不存在的节点
     try {
       const c = conn.rawQuery(
         `SELECT COUNT(*) FROM chain_meta cm
@@ -182,12 +193,11 @@ export class Migration {
       );
       const broken = c.moveToFirst() ? c.getInt(0) : 0;
       c.close();
-      if (broken > 0) logWarn("DB", `断裂链（head 指向不存在节点）: ${broken} 个 scope`);
+      if (broken > 0) logWarn("DB", `断裂链: ${broken} 个 scope`);
     } catch (e: any) {
       logWarn("DB", "断裂链检测失败: " + e.message);
     }
 
-    // 3. 悬空边
     try {
       const c = conn.rawQuery(
         `SELECT COUNT(*) FROM edges e
@@ -199,7 +209,6 @@ export class Migration {
       c.close();
       if (dangling > 0) {
         logWarn("DB", `悬空边: ${dangling} 条`);
-        // 悬空边可以安全删除
         conn.execSQL(
           `DELETE FROM edges
            WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE id=edges.from_node)
@@ -211,7 +220,6 @@ export class Migration {
       logWarn("DB", "悬空边检测失败: " + e.message);
     }
 
-    // 4. 节点类型分布
     try {
       const c = conn.rawQuery(
         `SELECT node_type, level, COUNT(*) FROM nodes
@@ -229,7 +237,6 @@ export class Migration {
       logWarn("DB", "节点分布统计失败: " + e.message);
     }
 
-    // 5. 边类型分布
     try {
       const c = conn.rawQuery(
         `SELECT edge_type, COUNT(*) FROM edges GROUP BY edge_type`,
@@ -248,12 +255,10 @@ export class Migration {
     logInfo("DB", "—— 检测完成 ——");
   }
 
-  // ============================ （临时）迭代检测 ============================= 
+  // ============================================
+  // 旧库检测 / 强制迁移
+  // ============================================
 
-  /**
-   * 检测是否为 v3（及更早）时期的数据库。
-   * 判断依据：存在任意一张 v3 特有表。
-   */
   public static isLegacyV3Database(conn: any): boolean {
     const v3Tables = [
       'short_segments',
@@ -271,10 +276,6 @@ export class Migration {
     return false;
   }
 
-  /**
-   * 强制迁移到 v4：删除旧表，重建新表。
-   * 只在用户明确确认“放弃旧数据”后调用。
-   */
   public static forceMigrateToV4(conn: any): boolean {
     try {
       logInfo("DB", "强制迁移到 v4：删除旧表...");
@@ -290,6 +291,4 @@ export class Migration {
       return false;
     }
   }
-
-  // ============================================================================== 
 }

@@ -59,7 +59,7 @@ export class MemoryInjector {
       content: a.node.content,
       originalContent: a.node.content,
       activation: a.activation,
-      isActive: a.activation > 0.5,
+      isActive: a.activation > 0.2,
       order: idx,
       recallAction: 'none'
     }));

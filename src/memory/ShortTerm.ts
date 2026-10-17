@@ -66,7 +66,7 @@ export class ShortTermMemory {
    * 2. 所有 pending 消息固化
    * 3. 插入当前 user 消息（pending）
    */
-    public async processUserMessage(
+  public async processUserMessage(
     sessionId: string,
     content: string,
     timestamp: number,
@@ -100,11 +100,13 @@ export class ShortTermMemory {
         'user', content, timestamp, msgId, arousal
       );
 
-      // 检查中期阈值
+      // 检查中期阈值：按当前会话的未折叠短块数判断
       const cfg = this.db.getConfig();
-      const blockCount = this.nodes.getBlockCount(scope.type, scope.id);
-      logDebug("ShortTerm", `短块累计=${blockCount}/${cfg.midThreshold}`);
-      if (blockCount >= cfg.midThreshold) {
+      const shouldTrigger = this.nodes.shouldTriggerConsolidation(
+        scope.type, scope.id, sessionId, cfg.midThreshold, 'mid'
+      );
+      logDebug("ShortTerm", `检查中期触发: ${shouldTrigger} (threshold=${cfg.midThreshold})`);
+      if (shouldTrigger) {
         const midTerm = new MidTermMemory();
         midTerm.checkConsolidation(scope.type, scope.id, sessionId)
           .catch((e: any) => logError("ShortTerm", "异步中期整理失败: " + e.message));

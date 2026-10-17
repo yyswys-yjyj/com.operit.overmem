@@ -16,6 +16,7 @@ const DB_PATH = "/storage/emulated/0/Download/Operit/overmem/mem.db";
 const sessionHelper = SessionHelper.getInstance();
 
 const db = DatabaseManager.getInstance(DB_PATH);
+db.initialize();
 
 const shortTerm = new ShortTermMemory();
 const injector = new MemoryInjector();
